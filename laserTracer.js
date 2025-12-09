@@ -1,56 +1,94 @@
-// 激光追踪算法
-// 追踪激光路径，处理反射和透射
+// 激光追踪算法：支持同色镜子的反射与透射双分支，优先返回命中路径
 
-function traceLaser(base, direction, mirrors, laserColor, gridSize, maxSteps = 10000) {
-    const path = [];
-    let pos = {x: base.x + 0.5, y: base.y + 0.5}; // 从基地中心发射
-    let dir = {dx: direction.dx, dy: direction.dy};
-    let steps = 0;
-    
-    path.push({...pos});
-    
-    while (steps < maxSteps) {
-        steps++;
-        
-        // 移动一小步
-        const stepSize = 0.01;
-        pos.x += dir.dx * stepSize;
-        pos.y += dir.dy * stepSize;
-        
-        // 检查是否出界
-        if (pos.x < 0 || pos.x > gridSize || pos.y < 0 || pos.y > gridSize) {
-            break;
-        }
-        
-        // 检查是否碰到镜子
-        const collision = checkLaserMirrorCollision(pos, dir, mirrors, laserColor);
-        
-        if (collision) {
-            path.push({...collision.point});
-            
-            if (collision.type === 'reflect') {
-                // 只反射，改变方向
-                dir = collision.newDirection;
-                pos = {...collision.point};
-            } else if (collision.type === 'both') {
-                // 既反射又透射，这里选择反射路径
-                // 实际游戏中可能需要追踪两条路径
-                dir = collision.reflectDirection;
-                pos = {...collision.point};
+function findLaserHitPath(base, direction, mirrors, laserColor, defenderBase, gridSize, maxSteps = 10000) {
+    const hitCell = (p, cell) => {
+        const eps = 1e-6;
+        return p.x >= cell.x - eps && p.x <= cell.x + 1 + eps &&
+               p.y >= cell.y - eps && p.y <= cell.y + 1 + eps;
+    };
+
+    const stepSize = 0.01;
+    const queue = [{
+        pos: { x: base.x + 0.5, y: base.y + 0.5 },
+        dir: { dx: direction.dx, dy: direction.dy },
+        path: [{ x: base.x + 0.5, y: base.y + 0.5 }],
+        steps: 0
+    }];
+
+    while (queue.length) {
+        const state = queue.shift();
+        let { pos, dir, path, steps } = state;
+
+        while (steps < maxSteps) {
+            steps++;
+            pos = { x: pos.x + dir.dx * stepSize, y: pos.y + dir.dy * stepSize };
+
+            // 先检查命中基地
+            if (defenderBase && hitCell(pos, defenderBase)) {
+                path.push({ ...pos });
+                return path;
             }
-            
-            // 避免在同一点上重复碰撞
-            pos.x += dir.dx * stepSize * 2;
-            pos.y += dir.dy * stepSize * 2;
-        }
-        
-        // 每隔一定距离记录路径点
-        if (steps % 10 === 0) {
-            path.push({...pos});
+
+            // 镜子碰撞（先于出界）
+            const collision = checkLaserMirrorCollision(pos, dir, mirrors, laserColor);
+            if (collision) {
+                path.push({ ...collision.point });
+
+                if (collision.type === 'reflect') {
+                    dir = collision.newDirection;
+                    pos = { ...collision.point };
+                } else if (collision.type === 'both') {
+                    // 分叉：反射与透射都要探索
+                    const transmitDir = collision.transmitDirection;
+                    queue.push({
+                        pos: { ...collision.point, x: collision.point.x + transmitDir.dx * stepSize * 2, y: collision.point.y + transmitDir.dy * stepSize * 2 },
+                        dir: transmitDir,
+                        path: [...path, { ...collision.point }],
+                        steps
+                    });
+                    dir = collision.reflectDirection;
+                    pos = { ...collision.point };
+                }
+
+                // 避免重复碰撞
+                pos = { x: pos.x + dir.dx * stepSize * 2, y: pos.y + dir.dy * stepSize * 2 };
+            }
+
+            // 记录每一步
+            path.push({ ...pos });
+
+            // 出界则结束当前分支
+            if (pos.x < 0 || pos.x > gridSize || pos.y < 0 || pos.y > gridSize) {
+                break;
+            }
         }
     }
-    
-    return path;
+
+    return null;
+}
+
+// 兼容旧接口：返回完整路径（单分支，不保证命中）
+function traceLaser(base, direction, mirrors, laserColor, gridSize, maxSteps = 10000) {
+    const path = findLaserHitPath(base, direction, mirrors, laserColor, null, gridSize, maxSteps);
+    // 如果未命中，回退为简单直线追踪（保留用于绘制）
+    if (path) return path;
+
+    const fallback = [{ x: base.x + 0.5, y: base.y + 0.5 }];
+    let pos = { x: base.x + 0.5, y: base.y + 0.5 };
+    let dir = { dx: direction.dx, dy: direction.dy };
+    const stepSize = 0.01;
+    for (let i = 0; i < maxSteps; i++) {
+        pos = { x: pos.x + dir.dx * stepSize, y: pos.y + dir.dy * stepSize };
+        const collision = checkLaserMirrorCollision(pos, dir, mirrors, laserColor);
+        if (collision) {
+            fallback.push({ ...collision.point });
+            dir = collision.type === 'reflect' ? collision.newDirection : collision.reflectDirection;
+            pos = { ...collision.point, x: collision.point.x + dir.dx * stepSize * 2, y: collision.point.y + dir.dy * stepSize * 2 };
+        }
+        fallback.push({ ...pos });
+        if (pos.x < 0 || pos.x > gridSize || pos.y < 0 || pos.y > gridSize) break;
+    }
+    return fallback;
 }
 
 function checkLaserMirrorCollision(pos, dir, mirrors, laserColor) {
@@ -152,7 +190,7 @@ function lineSegmentIntersection(p1, p2, p3, p4) {
     return null;
 }
 
-// 检查激光是否能击中目标基地
+// 检查激光是否能击中目标基地（考虑同色镜子透射+反射分支）
 function canLaserHitBase(attackerBase, attackerColor, defenderBase, mirrors, gridSize) {
     const directions = [
         {dx: 1, dy: 0},  // 右
@@ -160,21 +198,10 @@ function canLaserHitBase(attackerBase, attackerColor, defenderBase, mirrors, gri
         {dx: 0, dy: 1},  // 下
         {dx: 0, dy: -1}  // 上
     ];
-    
     for (const dir of directions) {
-        const path = traceLaser(attackerBase, dir, mirrors, attackerColor, gridSize);
-        
-        // 检查路径是否通过防守方基地
-        for (const point of path) {
-            const cellX = Math.floor(point.x);
-            const cellY = Math.floor(point.y);
-            
-            if (cellX === defenderBase.x && cellY === defenderBase.y) {
-                return true;
-            }
-        }
+        const path = findLaserHitPath(attackerBase, dir, mirrors, attackerColor, defenderBase, gridSize);
+        if (path) return true;
     }
-    
     return false;
 }
 

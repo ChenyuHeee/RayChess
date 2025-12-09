@@ -20,6 +20,10 @@ class LaserChessGame {
         this.aiThinking = false;
         this.aiThoughtMirror = null;
         this.aiThinkingTrace = null; // AI 评估的候选信息
+        this.winner = null; // 记录获胜方
+        this.currentPlayer = 'red';
+        this.winningLaser = null;
+        this.pendingWinCheck = null; // 等待到下个回合开始时检查的进攻方
         
         // 交互状态
         this.selectedPoint = null; // 镜子放置的第一个点
@@ -84,6 +88,7 @@ class LaserChessGame {
     }
     
     handleClick(e) {
+        if (this.checkPendingWin()) return;
         const {x, y} = this.getCanvasCoordinates(e);
         const point = this.getNearestGridPoint(x, y);
         
@@ -203,23 +208,39 @@ class LaserChessGame {
 
         if (candidates.length === 0) return null;
 
+        const center = { x: this.gridSize / 2, y: this.gridSize / 2 };
+
         if (this.currentPlayer === 'blue' && this.redBase) {
+            // 远离对手优先，再次靠近中心平衡
             let best = null;
-            let bestDist = -1;
+            let bestScore = -Infinity;
             for (const pos of candidates) {
                 const dx = pos.x - this.redBase.x;
                 const dy = pos.y - this.redBase.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist > bestDist) {
-                    bestDist = dist;
+                const centerDist = Math.sqrt((pos.x - center.x) ** 2 + (pos.y - center.y) ** 2);
+                const score = dist * 2 - centerDist * 0.3;
+                if (score > bestScore) {
+                    bestScore = score;
                     best = pos;
                 }
             }
             return best;
         }
 
-        const idx = Math.floor(Math.random() * candidates.length);
-        return candidates[idx];
+        // 红方：开局无对手时倾向中心稍偏随机，避免角落
+        let best = null;
+        let bestScore = -Infinity;
+        for (const pos of candidates) {
+            const centerDist = Math.sqrt((pos.x - center.x) ** 2 + (pos.y - center.y) ** 2);
+            const edgeDist = Math.min(pos.x, pos.y, this.gridSize - pos.x, this.gridSize - pos.y);
+            const score = -centerDist + edgeDist * 0.4 + Math.random() * 0.1;
+            if (score > bestScore) {
+                bestScore = score;
+                best = pos;
+            }
+        }
+        return best;
     }
 
     isBasePositionAllowed(pos) {
@@ -365,20 +386,20 @@ class LaserChessGame {
                     mirror: {...mirror}
                 });
                 
-                // 检查是否获胜（当前玩家进攻）
-                const winner = this.checkWinCondition();
-                if (winner) {
-                    this.gamePhase = 'gameOver';
-                    this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
-                    this.drawWinningLaser(winner);
-                } else {
-                    this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
-                    this.showMessage('镜子已放置', 'success');
-                    
-                    if (this.aiEnabled && this.aiPlayer === this.currentPlayer) {
-                        setTimeout(() => this.aiMove(), 500);
-                    }
+                const prevPlayer = this.currentPlayer;
+                this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                this.showMessage('镜子已放置', 'success');
+
+                // 记录到下回合开始检查，已有待检查则不覆盖
+                if (!this.pendingWinCheck) {
+                    this.pendingWinCheck = prevPlayer;
                 }
+
+                if (this.aiEnabled && this.aiPlayer === this.currentPlayer) {
+                    setTimeout(() => this.aiMove(), 120);
+                }
+                // 若当前已轮到记录的进攻方，立即判定
+                this.checkPendingWin();
             } else {
                 this.showMessage('无效的镜子放置', 'error');
             }
@@ -561,9 +582,9 @@ class LaserChessGame {
         return covered >= 4; // 四面全封为严密包围
     }
     
-    checkWinCondition() {
-        // 当前回合玩家作为进攻方，四向发射激光，若能击中对手基地则胜
-        const attacker = this.currentPlayer;
+    checkWinCondition(attackerOverride = null) {
+        // 以指定进攻方发射激光（用于“下一回合”判胜）
+        const attacker = attackerOverride || this.currentPlayer;
         const defender = attacker === 'red' ? 'blue' : 'red';
         const attackerBase = attacker === 'red' ? this.redBase : this.blueBase;
         const defenderBase = defender === 'red' ? this.redBase : this.blueBase;
@@ -577,18 +598,44 @@ class LaserChessGame {
             {dx: 0, dy: -1}  // 上
         ];
 
-        for (const dir of directions) {
-            const laserPath = traceLaser(attackerBase, dir, this.mirrors, attacker, this.gridSize);
+        const hitCell = (p, cell) => {
+            const eps = 1e-6;
+            return p.x >= cell.x - eps && p.x <= cell.x + 1 + eps &&
+                   p.y >= cell.y - eps && p.y <= cell.y + 1 + eps;
+        };
 
-            for (const point of laserPath) {
-                if (Math.floor(point.x) === defenderBase.x && Math.floor(point.y) === defenderBase.y) {
-                    this.winningLaser = { base: attackerBase, direction: dir, path: laserPath };
-                    return attacker;
-                }
+        // 先用矩形命中判定（与 AI 评估一致），再保存路径
+        const canHit = canLaserHitBase(attackerBase, attacker, defenderBase, this.mirrors, this.gridSize);
+        if (!canHit) return null;
+
+        // 寻找任一方向的命中路径（同色镜子支持反射+透射分支）
+        for (const dir of directions) {
+            const laserPath = findLaserHitPath(attackerBase, dir, this.mirrors, attacker, defenderBase, this.gridSize);
+            if (laserPath) {
+                this.winningLaser = { base: attackerBase, direction: dir, path: laserPath };
+                return attacker;
             }
         }
 
         return null;
+    }
+
+    checkPendingWin() {
+        if (!this.pendingWinCheck || this.gamePhase !== 'placeMirrors' || this.gamePhase === 'gameOver') return false;
+        // 仅在记录的进攻方重新轮到时才判胜（等待完整一轮）
+        if (this.currentPlayer !== this.pendingWinCheck) return false;
+        if (!this.redBase || !this.blueBase) { this.pendingWinCheck = null; return false; }
+        const winner = this.checkWinCondition(this.pendingWinCheck);
+        if (winner) {
+            this.gamePhase = 'gameOver';
+            this.winner = winner;
+            this.updateStatus();
+            setTimeout(() => this.drawWinningLaser(winner), 120);
+            this.pendingWinCheck = null;
+            return true;
+        }
+        this.pendingWinCheck = null;
+        return false;
     }
     
     drawWinningLaser(winner) {
@@ -602,6 +649,7 @@ class LaserChessGame {
     
     aiMove() {
         if (this.gamePhase !== 'placeMirrors' || !this.aiEnabled) return;
+        if (this.checkPendingWin()) return;
         
         this.aiThinking = true;
         this.aiThoughtMirror = null;
@@ -641,25 +689,29 @@ class LaserChessGame {
                     type: 'mirror',
                     mirror: {...move}
                 });
-                
-                const winner = this.checkWinCondition();
-                if (winner) {
-                    this.gamePhase = 'gameOver';
-                    this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
-                    this.drawWinningLaser(winner);
-                } else {
-                    this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
-                    this.showMessage('AI已放置镜子', 'success');
+                const prevPlayer = this.currentPlayer;
+                this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                this.showMessage('AI已放置镜子', 'success');
+
+                // 记录待判胜的进攻方，等下回合开始检查；已有待检查则不覆盖
+                if (!this.pendingWinCheck) {
+                    this.pendingWinCheck = prevPlayer;
                 }
-                
+
                 this.updateStatus();
                 this.draw();
+
+                // 若当前已轮到记录的进攻方，立即判定
+                this.checkPendingWin();
             } else {
                 // AI 无路可走，跳过回合
                 this.showMessage('AI无可走步，回合跳过', 'warning');
                 this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
                 this.updateStatus();
                 this.draw();
+
+                // 若存在待检查胜利且已轮到对应方，立刻判定
+                this.checkPendingWin();
             }
         }, 80);
     }
@@ -711,6 +763,8 @@ class LaserChessGame {
         this.aiThinking = false;
         this.aiThoughtMirror = null;
         this.aiThinkingTrace = null;
+        this.winner = null;
+        this.pendingWinCheck = null; // 重置待检查的胜利状态
         
         this.setupCanvas();
         this.updateStatus();
@@ -740,13 +794,14 @@ class LaserChessGame {
             statusEl.textContent = '游戏进行中';
             phaseEl.textContent = '镜子放置';
         } else if (this.gamePhase === 'gameOver') {
-            const winner = this.currentPlayer === 'red' ? '蓝方' : '红方';
+            const winner = this.winner === 'red' ? '红方' : '蓝方';
             statusEl.textContent = `游戏结束 - ${winner}获胜`;
             phaseEl.textContent = '游戏结束';
         }
         
-        playerEl.textContent = this.currentPlayer === 'red' ? '红方' : '蓝方';
-        playerEl.className = `player-indicator ${this.currentPlayer}`;
+        const showSide = this.gamePhase === 'gameOver' && this.winner ? this.winner : this.currentPlayer;
+        playerEl.textContent = showSide === 'red' ? '红方' : '蓝方';
+        playerEl.className = `player-indicator ${showSide}`;
         
         undoBtn.disabled = this.moveHistory.length === 0 || this.gamePhase === 'gameOver';
     }
