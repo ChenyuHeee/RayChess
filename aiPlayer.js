@@ -2,7 +2,6 @@
 // 实现简单的启发式AI
 
 function findBestMove(player, redBase, blueBase, mirrors, gridSize) {
-    const opponent = player === 'red' ? 'blue' : 'red';
     const myBase = player === 'red' ? redBase : blueBase;
     const opponentBase = player === 'red' ? blueBase : redBase;
     
@@ -27,6 +26,33 @@ function findBestMove(player, redBase, blueBase, mirrors, gridSize) {
     }
     
     return bestMove;
+}
+
+// 带评估明细的搜索，便于可视化
+function findBestMoveWithTrace(player, redBase, blueBase, mirrors, gridSize) {
+    const opponent = player === 'red' ? 'blue' : 'red';
+    const myBase = player === 'red' ? redBase : blueBase;
+    const opponentBase = player === 'red' ? blueBase : redBase;
+
+    const possibleMirrors = getAllPossibleMirrors(player, redBase, blueBase, mirrors, gridSize);
+    if (possibleMirrors.length === 0) return null;
+
+    const evaluations = [];
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for (const mirror of possibleMirrors) {
+        const detail = evaluateMoveDetailed(mirror, player, myBase, opponentBase, mirrors, gridSize);
+        evaluations.push({ mirror, score: detail.score, reasons: detail.reasons });
+        if (detail.score > bestScore) {
+            bestScore = detail.score;
+            bestMove = mirror;
+        }
+    }
+
+    evaluations.sort((a, b) => b.score - a.score);
+
+    return { bestMove, evaluations };
 }
 
 function evaluateMove(mirror, player, myBase, opponentBase, existingMirrors, gridSize) {
@@ -104,6 +130,76 @@ function evaluateMove(mirror, player, myBase, opponentBase, existingMirrors, gri
     score += Math.random() * 5;
     
     return score;
+}
+
+// 评估并返回原因，供可视化使用
+function evaluateMoveDetailed(mirror, player, myBase, opponentBase, existingMirrors, gridSize) {
+    let score = 0;
+    const reasons = [];
+    const testMirrors = [...existingMirrors, mirror];
+
+    const opponent = player === 'red' ? 'blue' : 'red';
+    const beforeDefense = canLaserHitBase(opponentBase, opponent, myBase, existingMirrors, gridSize);
+    const afterDefense = canLaserHitBase(opponentBase, opponent, myBase, testMirrors, gridSize);
+    if (beforeDefense && !afterDefense) {
+        score += 1000;
+        reasons.push('阻挡对手激光');
+    }
+
+    const beforeAttack = canLaserHitBase(myBase, player, opponentBase, existingMirrors, gridSize);
+    const afterAttack = canLaserHitBase(myBase, player, opponentBase, testMirrors, gridSize);
+    if (!beforeAttack && afterAttack) {
+        score += 800;
+        reasons.push('创造进攻路径');
+    }
+
+    const centerX = gridSize / 2;
+    const centerY = gridSize / 2;
+    const avgX = (mirror.x1 + mirror.x2) / 2;
+    const avgY = (mirror.y1 + mirror.y2) / 2;
+    const distToCenter = Math.sqrt(Math.pow(avgX - centerX, 2) + Math.pow(avgY - centerY, 2));
+    const centerScore = (gridSize - distToCenter) * 2;
+    score += centerScore;
+    reasons.push(`靠近中心 +${centerScore.toFixed(1)}`);
+
+    const distToMyBase = Math.sqrt(Math.pow(avgX - myBase.x - 0.5, 2) + Math.pow(avgY - myBase.y - 0.5, 2));
+    if (distToMyBase < 5) {
+        score += 100;
+        reasons.push('保护己基地');
+    }
+
+    const distToOpponentBase = Math.sqrt(Math.pow(avgX - opponentBase.x - 0.5, 2) + Math.pow(avgY - opponentBase.y - 0.5, 2));
+    if (distToOpponentBase < 5) {
+        score += 50;
+        reasons.push('施压对手基地');
+    }
+
+    if (mirror.x1 !== mirror.x2 && mirror.y1 !== mirror.y2) {
+        score += 20;
+        reasons.push('对角线镜子');
+    }
+
+    let connections = 0;
+    for (const existing of existingMirrors) {
+        if (existing.player === player) {
+            if ((existing.x1 === mirror.x1 && existing.y1 === mirror.y1) ||
+                (existing.x1 === mirror.x2 && existing.y1 === mirror.y2) ||
+                (existing.x2 === mirror.x1 && existing.y2 === mirror.y1) ||
+                (existing.x2 === mirror.x2 && existing.y2 === mirror.y2)) {
+                connections++;
+            }
+        }
+    }
+    if (connections > 0) {
+        score += connections * 10;
+        reasons.push(`连接己方镜子 +${connections * 10}`);
+    }
+
+    const jitter = Math.random() * 5;
+    score += jitter;
+    reasons.push('少量随机性');
+
+    return { score, reasons };
 }
 
 // 简化版AI：随机选择合法移动

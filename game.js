@@ -19,6 +19,7 @@ class LaserChessGame {
         this.baseOpenChoice = 'top';
         this.aiThinking = false;
         this.aiThoughtMirror = null;
+        this.aiThinkingTrace = null; // AI 评估的候选信息
         
         // 交互状态
         this.selectedPoint = null; // 镜子放置的第一个点
@@ -694,54 +695,63 @@ class LaserChessGame {
         this.baseOpenSide = { red: null, blue: null };
         this.aiThinking = false;
         this.aiThoughtMirror = null;
+        this.aiThinkingTrace = null;
         
         this.setupCanvas();
         this.updateStatus();
         this.draw();
         this.showMessage('游戏已重置', 'info');
 
+            this.aiThinkingTrace = null;
         this.baseOpenSide = { red: null, blue: null };
 
-        if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
-            setTimeout(() => this.aiPlaceBase(), 300);
-        }
-    }
-    
-    updateStatus() {
-        const statusEl = document.getElementById('gameStatus');
-        const playerEl = document.getElementById('currentPlayer');
-        const phaseEl = document.getElementById('gamePhase');
-        const undoBtn = document.getElementById('undoBtn');
-        
-        if (this.gamePhase === 'placeBase') {
-            if (!this.redBase) {
-                statusEl.textContent = '请红方放置基地';
-                phaseEl.textContent = '基地放置';
-            } else {
-                statusEl.textContent = '请蓝方放置基地';
-                phaseEl.textContent = '基地放置';
-            }
-        } else if (this.gamePhase === 'placeMirrors') {
-            statusEl.textContent = '游戏进行中';
-            phaseEl.textContent = '镜子放置';
-        } else if (this.gamePhase === 'gameOver') {
-            const winner = this.currentPlayer === 'red' ? '蓝方' : '红方';
-            statusEl.textContent = `游戏结束 - ${winner}获胜`;
-            phaseEl.textContent = '游戏结束';
-        }
-        
-        playerEl.textContent = this.currentPlayer === 'red' ? '红方' : '蓝方';
-        playerEl.className = `player-indicator ${this.currentPlayer}`;
-        
-        undoBtn.disabled = this.moveHistory.length === 0 || this.gamePhase === 'gameOver';
-    }
-    
-    showMessage(message, type = 'info') {
-        const messageBox = document.getElementById('messageBox');
-        messageBox.textContent = message;
-        messageBox.className = `message-box ${type}`;
-        
-        // 自动清除消息
+            // 先计算评估结果并展示，再落子
+            setTimeout(() => {
+                const result = findBestMoveWithTrace(
+                    this.currentPlayer,
+                    this.redBase,
+                    this.blueBase,
+                    this.mirrors,
+                    this.gridSize
+                );
+
+                if (!result) {
+                    this.aiThinking = false;
+                    this.draw();
+                    return;
+                }
+
+                const { bestMove, evaluations } = result;
+                this.aiThoughtMirror = bestMove;
+                this.aiThinkingTrace = evaluations.slice(0, 4); // 顶部展示前4个候选
+                this.draw();
+
+                // 给玩家一点时间看思考过程，再落子
+                setTimeout(() => {
+                    this.aiThinking = false;
+
+                    this.mirrors.push(bestMove);
+                    this.moveHistory.push({
+                        type: 'mirror',
+                        mirror: { ...bestMove }
+                    });
+
+                    const winner = this.checkWinCondition();
+                    if (winner) {
+                        this.gamePhase = 'gameOver';
+                        this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
+                        this.drawWinningLaser(winner);
+                    } else {
+                        this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                        this.showMessage('AI已放置镜子', 'success');
+                    }
+
+                    this.updateStatus();
+                    this.aiThinkingTrace = null;
+                    this.aiThoughtMirror = null;
+                    this.draw();
+                }, 900);
+            }, 400);
         setTimeout(() => {
             if (messageBox.textContent === message) {
                 messageBox.textContent = '';
@@ -756,11 +766,11 @@ class LaserChessGame {
         // 绘制网格
         this.drawGrid();
         
-        // 绘制镜子
-        this.drawMirrors();
-        
-        // 绘制基地
+        // 绘制基地（底层，不遮挡护盾线）
         this.drawBases();
+        
+        // 绘制镜子和护盾
+        this.drawMirrors();
         
         // 绘制选中的点
         if (this.selectedPoint) {
@@ -829,15 +839,14 @@ class LaserChessGame {
         const x = this.padding + base.x * this.cellSize;
         const y = this.padding + base.y * this.cellSize;
         const open = this.baseOpenSide[player];
-        const m = 2; // inner margin for visible gap
-
-        // 填充内区，留出边缘显示开口
+        
+        // 基地填充
         this.ctx.fillStyle = color;
-        this.ctx.globalAlpha = 0.25;
-        this.ctx.fillRect(x + m, y + m, this.cellSize - 2 * m, this.cellSize - 2 * m);
+        this.ctx.globalAlpha = 0.3;
+        this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
         this.ctx.globalAlpha = 1;
-
-        // 绘制边框，跳过开口方向
+        
+        // 只画三条边，开口方向留空
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = 3;
         const edges = {
@@ -847,40 +856,22 @@ class LaserChessGame {
             right:  {move: [x + this.cellSize, y], line: [x + this.cellSize, y + this.cellSize]}
         };
         Object.entries(edges).forEach(([dir, pts]) => {
-            if (dir === open) return;
+            if (open && dir === open) return; // 保持开口
             this.ctx.beginPath();
             this.ctx.moveTo(...pts.move);
             this.ctx.lineTo(...pts.line);
             this.ctx.stroke();
         });
-
-        // 在开口方向画一个小箭头提示
-        if (open && edges[open]) {
-            const arrowColor = color;
-            this.ctx.fillStyle = arrowColor;
-            const midX = (edges[open].move[0] + edges[open].line[0]) / 2;
-            const midY = (edges[open].move[1] + edges[open].line[1]) / 2;
-            const a = 5;
-            this.ctx.beginPath();
-            if (open === 'top') {
-                this.ctx.moveTo(midX, y - 4);
-                this.ctx.lineTo(midX - a, y + 4);
-                this.ctx.lineTo(midX + a, y + 4);
-            } else if (open === 'bottom') {
-                this.ctx.moveTo(midX, y + this.cellSize + 4);
-                this.ctx.lineTo(midX - a, y + this.cellSize - 4);
-                this.ctx.lineTo(midX + a, y + this.cellSize - 4);
-            } else if (open === 'left') {
-                this.ctx.moveTo(x - 4, midY);
-                this.ctx.lineTo(x + 4, midY - a);
-                this.ctx.lineTo(x + 4, midY + a);
-            } else if (open === 'right') {
-                this.ctx.moveTo(x + this.cellSize + 4, midY);
-                this.ctx.lineTo(x + this.cellSize - 4, midY - a);
-                this.ctx.lineTo(x + this.cellSize - 4, midY + a);
-            }
-            this.ctx.fill();
-        }
+        
+        // 绘制X标记
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x + 3, y + 3);
+        this.ctx.lineTo(x + this.cellSize - 3, y + this.cellSize - 3);
+        this.ctx.moveTo(x + this.cellSize - 3, y + 3);
+        this.ctx.lineTo(x + 3, y + this.cellSize - 3);
+        this.ctx.stroke();
     }
     
     drawMirrors() {
@@ -986,18 +977,58 @@ class LaserChessGame {
     }
 
     drawAiOverlay() {
-        // 思考提示
-        if (this.aiThinking) {
+        // 思考提示面板
+        if (this.aiThinking || (this.aiThinkingTrace && this.aiThinkingTrace.length)) {
             this.ctx.save();
-            this.ctx.fillStyle = 'rgba(0,0,0,0.4)';
-            this.ctx.fillRect(10, 10, 140, 32);
+            this.ctx.fillStyle = 'rgba(0,0,0,0.45)';
+            const panelWidth = 260;
+            const lineHeight = 18;
+            const rows = 1 + (this.aiThinkingTrace ? this.aiThinkingTrace.length : 0);
+            const panelHeight = 16 + rows * lineHeight + 8;
+            this.ctx.fillRect(10, 10, panelWidth, panelHeight);
+
             this.ctx.fillStyle = '#22d3ee';
             this.ctx.font = '14px Segoe UI, sans-serif';
-            this.ctx.fillText('AI 思考中...', 20, 32);
+            this.ctx.fillText(this.aiThinking ? 'AI 思考中...' : 'AI 候选评估', 16, 30);
+
+            if (this.aiThinkingTrace) {
+                this.ctx.font = '12px Segoe UI, sans-serif';
+                this.aiThinkingTrace.forEach((item, idx) => {
+                    const y = 30 + lineHeight * (idx + 1);
+                    const tag = `#${idx + 1} 评分 ${item.score.toFixed(1)}`;
+                    const reason = item.reasons.slice(0, 2).join('，');
+                    this.ctx.fillStyle = '#e2e8f0';
+                    this.ctx.fillText(`${tag}: ${reason}`, 16, y);
+                });
+            }
+
             this.ctx.restore();
         }
 
-        // 高亮 AI 选择的镜子
+        // 高亮 AI 候选镜子（前几个）
+        if (this.aiThinkingTrace && this.aiThinkingTrace.length) {
+            const colors = ['rgba(34,211,238,0.9)', 'rgba(34,211,238,0.55)', 'rgba(34,211,238,0.35)', 'rgba(34,211,238,0.25)'];
+            this.aiThinkingTrace.forEach((item, idx) => {
+                const m = item.mirror;
+                const x1 = this.padding + m.x1 * this.cellSize;
+                const y1 = this.padding + m.y1 * this.cellSize;
+                const x2 = this.padding + m.x2 * this.cellSize;
+                const y2 = this.padding + m.y2 * this.cellSize;
+                this.ctx.save();
+                this.ctx.strokeStyle = colors[idx] || colors[colors.length - 1];
+                this.ctx.lineWidth = idx === 0 ? 4 : 2;
+                this.ctx.setLineDash(idx === 0 ? [8, 4] : [6, 6]);
+                this.ctx.shadowColor = '#22d3ee';
+                this.ctx.shadowBlur = idx === 0 ? 10 : 4;
+                this.ctx.beginPath();
+                this.ctx.moveTo(x1, y1);
+                this.ctx.lineTo(x2, y2);
+                this.ctx.stroke();
+                this.ctx.restore();
+            });
+        }
+
+        // 最终选择的镜子高亮（落子前）
         if (this.aiThoughtMirror) {
             const m = this.aiThoughtMirror;
             const x1 = this.padding + m.x1 * this.cellSize;
@@ -1005,11 +1036,11 @@ class LaserChessGame {
             const x2 = this.padding + m.x2 * this.cellSize;
             const y2 = this.padding + m.y2 * this.cellSize;
             this.ctx.save();
-            this.ctx.strokeStyle = 'rgba(34,211,238,0.9)';
-            this.ctx.lineWidth = 3;
-            this.ctx.setLineDash([6, 6]);
-            this.ctx.shadowColor = '#22d3ee';
-            this.ctx.shadowBlur = 12;
+            this.ctx.strokeStyle = 'rgba(16,185,129,0.9)';
+            this.ctx.lineWidth = 4;
+            this.ctx.setLineDash([10, 4]);
+            this.ctx.shadowColor = '#10b981';
+            this.ctx.shadowBlur = 14;
             this.ctx.beginPath();
             this.ctx.moveTo(x1, y1);
             this.ctx.lineTo(x2, y2);
@@ -1021,39 +1052,57 @@ class LaserChessGame {
 
 // 启动游戏与主页交互
 let game;
-window.addEventListener('DOMContentLoaded', () => {
+
+function startGame() {
     const homeView = document.getElementById('homeView');
     const gameView = document.getElementById('gameView');
-    const startBtn = document.getElementById('startGameBtn');
     const homeGridSize = document.getElementById('homeGridSize');
     const homeMode = document.getElementById('homeMode');
+    if (!homeGridSize || !homeMode || !homeView || !gameView) return;
 
+    // 若尚未初始化游戏实例，立即创建
+    if (!game) {
+        game = new LaserChessGame();
+    }
+
+    const size = parseInt(homeGridSize.value);
+    const aiOn = homeMode.value === 'ai';
+    const openSelect = document.getElementById('openSideSelect');
+    if (openSelect) {
+        game.baseOpenChoice = openSelect.value;
+    }
+
+    // 同步到游戏控件
+    const inGameSize = document.getElementById('gridSize');
+    if (inGameSize) {
+        inGameSize.value = String(size);
+    }
+    game.gridSize = size;
+    game.reset();
+
+    game.aiEnabled = aiOn;
+    const aiBtn = document.getElementById('toggleAIBtn');
+    if (aiBtn) {
+        aiBtn.textContent = `AI: ${aiOn ? '开启 (蓝方)' : '关闭'}`;
+    }
+
+    homeView.classList.add('hidden');
+    gameView.classList.remove('hidden');
+
+    // 如需 AI 先手，在重置后触发
+    if (game.aiEnabled && game.currentPlayer === game.aiPlayer && game.gamePhase === 'placeBase') {
+        setTimeout(() => game.aiPlaceBase(), 300);
+    }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
     game = new LaserChessGame();
 
-    startBtn.addEventListener('click', () => {
-        const size = parseInt(homeGridSize.value);
-        const aiOn = homeMode.value === 'ai';
-        const openSelect = document.getElementById('openSideSelect');
-        if (openSelect) {
-            game.baseOpenChoice = openSelect.value;
-        }
-
-        // 同步到游戏控件
-        const inGameSize = document.getElementById('gridSize');
-        inGameSize.value = String(size);
-        game.gridSize = size;
-        game.reset();
-
-        game.aiEnabled = aiOn;
-        const aiBtn = document.getElementById('toggleAIBtn');
-        aiBtn.textContent = `AI: ${aiOn ? '开启 (蓝方)' : '关闭'}`;
-
-        homeView.classList.add('hidden');
-        gameView.classList.remove('hidden');
-
-        // 如需 AI 先手，在重置后触发
-        if (game.aiEnabled && game.currentPlayer === game.aiPlayer && game.gamePhase === 'placeBase') {
-            setTimeout(() => game.aiPlaceBase(), 300);
-        }
-    });
+    const startBtn = document.getElementById('startGameBtn');
+    if (startBtn) {
+        startBtn.addEventListener('click', startGame);
+    }
 });
+
+// 提供全局访问，防止事件绑定失败时仍可触发
+window.startGame = startGame;
