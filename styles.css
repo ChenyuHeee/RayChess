@@ -204,6 +204,14 @@ h1 {
     color: #e5e7eb;
 }
 
+.pill-select-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #cbd5e1;
+    font-size: 0.95rem;
+}
+
 .game-board-container.minimal {
     background: #0b1120;
     border-radius: 14px;

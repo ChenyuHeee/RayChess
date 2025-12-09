@@ -9,13 +9,16 @@ class LaserChessGame {
         
         // 游戏状态
         this.gamePhase = 'placeBase'; // placeBase, placeMirrors, gameOver
-        this.currentPlayer = 'red'; // red, blue
         this.redBase = null; // {x, y}
         this.blueBase = null; // {x, y}
         this.mirrors = []; // [{x1, y1, x2, y2, player}]
         this.moveHistory = [];
         this.aiEnabled = false;
         this.aiPlayer = 'blue'; // AI控制的玩家
+        this.baseOpenSide = { red: null, blue: null }; // 记录每个基地保留的开口方向
+        this.baseOpenChoice = 'top';
+        this.aiThinking = false;
+        this.aiThoughtMirror = null;
         
         // 交互状态
         this.selectedPoint = null; // 镜子放置的第一个点
@@ -48,6 +51,12 @@ class LaserChessGame {
             this.gridSize = parseInt(e.target.value);
             this.reset();
         });
+        const openSideSelect = document.getElementById('openSideSelect');
+        if (openSideSelect) {
+            openSideSelect.addEventListener('change', (e) => {
+                this.baseOpenChoice = e.target.value;
+            });
+        }
     }
     
     getCanvasCoordinates(e) {
@@ -98,7 +107,7 @@ class LaserChessGame {
         
         if (this.currentPlayer === 'red') {
             this.redBase = {x, y};
-            if (!this.createBaseShield(this.redBase, 'red')) {
+            if (!this.createBaseShield(this.redBase, 'red', this.baseOpenChoice)) {
                 this.redBase = null;
                 this.showMessage('该位置无法生成三面防护镜子，请换个位置', 'error');
                 this.updateStatus();
@@ -121,7 +130,7 @@ class LaserChessGame {
             }
             
             this.blueBase = {x, y};
-            if (!this.createBaseShield(this.blueBase, 'blue')) {
+            if (!this.createBaseShield(this.blueBase, 'blue', this.baseOpenChoice)) {
                 this.blueBase = null;
                 this.showMessage('该位置无法生成三面防护镜子，请换个位置', 'error');
                 this.updateStatus();
@@ -151,7 +160,8 @@ class LaserChessGame {
 
         if (this.currentPlayer === 'red') {
             this.redBase = basePos;
-            if (!this.createBaseShield(this.redBase, 'red')) {
+            const open = this.pickAiOpenSide(basePos, 'red');
+            if (!this.createBaseShield(this.redBase, 'red', open)) {
                 this.redBase = null;
                 this.showMessage('AI 未能找到可放置的三面防护基地位置', 'error');
                 return;
@@ -160,7 +170,8 @@ class LaserChessGame {
             this.currentPlayer = 'blue';
         } else {
             this.blueBase = basePos;
-            if (!this.createBaseShield(this.blueBase, 'blue')) {
+            const open = this.pickAiOpenSide(basePos, 'blue');
+            if (!this.createBaseShield(this.blueBase, 'blue', open)) {
                 this.blueBase = null;
                 this.showMessage('AI 未能找到可放置的三面防护基地位置', 'error');
                 return;
@@ -226,7 +237,7 @@ class LaserChessGame {
         return true;
     }
 
-    canCreateShieldAt(basePos, player) {
+    canCreateShieldAt(basePos, player, preferredOpen = null) {
         const edges = [
             {dir: 'top', a: {x: basePos.x, y: basePos.y}, b: {x: basePos.x + 1, y: basePos.y}},
             {dir: 'bottom', a: {x: basePos.x, y: basePos.y + 1}, b: {x: basePos.x + 1, y: basePos.y + 1}},
@@ -234,7 +245,9 @@ class LaserChessGame {
             {dir: 'right', a: {x: basePos.x + 1, y: basePos.y}, b: {x: basePos.x + 1, y: basePos.y + 1}}
         ];
 
-        for (const open of edges) {
+        const openList = preferredOpen ? edges.filter(e => e.dir === preferredOpen) : edges;
+
+        for (const open of openList) {
             if (!this.isEdgeFree(open)) continue;
             const toPlace = edges.filter(e => e !== open);
             if (toPlace.every(edge => this.canPlaceShieldEdge(edge, player))) {
@@ -242,6 +255,34 @@ class LaserChessGame {
             }
         }
         return false;
+    }
+
+    pickAiOpenSide(basePos, player) {
+        const opponentBase = player === 'red' ? this.blueBase : this.redBase;
+        const dirs = ['top', 'right', 'bottom', 'left'];
+        if (!opponentBase) {
+            for (const d of dirs) {
+                if (this.canCreateShieldAt(basePos, player, d)) return d;
+            }
+            return null;
+        }
+
+        const dx = basePos.x - opponentBase.x;
+        const dy = basePos.y - opponentBase.y;
+        const scored = [
+            {dir: 'top', score: dy >= 0 ? Math.abs(dy) : -Math.abs(dy)},
+            {dir: 'bottom', score: dy <= 0 ? Math.abs(dy) : -Math.abs(dy)},
+            {dir: 'left', score: dx >= 0 ? Math.abs(dx) : -Math.abs(dx)},
+            {dir: 'right', score: dx <= 0 ? Math.abs(dx) : -Math.abs(dx)}
+        ].sort((a, b) => b.score - a.score);
+
+        for (const item of scored) {
+            if (this.canCreateShieldAt(basePos, player, item.dir)) return item.dir;
+        }
+        for (const d of dirs) {
+            if (this.canCreateShieldAt(basePos, player, d)) return d;
+        }
+        return null;
     }
 
     canPlaceShieldEdge(edge, player) {
@@ -253,7 +294,6 @@ class LaserChessGame {
             player
         };
 
-        // 不得与已有镜子重叠或交叉
         for (const m of this.mirrors) {
             if (this.mirrorsOverlapOrIntersect(mirror, m) || this.mirrorsProperIntersect(mirror, m)) {
                 return false;
@@ -263,13 +303,15 @@ class LaserChessGame {
     }
 
     isEdgeFree(edge) {
-        return !this.mirrors.some(m =>
-            (m.x1 === edge.a.x && m.y1 === edge.a.y && m.x2 === edge.b.x && m.y2 === edge.b.y) ||
-            (m.x2 === edge.a.x && m.y2 === edge.a.y && m.x1 === edge.b.x && m.y1 === edge.b.y)
-        );
+        return !this.mirrors.some(m => this.matchesEdge(m, edge));
     }
 
-    createBaseShield(base, player) {
+    matchesEdge(mirror, edge) {
+        return (mirror.x1 === edge.a.x && mirror.y1 === edge.a.y && mirror.x2 === edge.b.x && mirror.y2 === edge.b.y) ||
+               (mirror.x2 === edge.a.x && mirror.y2 === edge.a.y && mirror.x1 === edge.b.x && mirror.y1 === edge.b.y);
+    }
+
+    createBaseShield(base, player, preferredOpen = null) {
         const edges = [
             {dir: 'top', a: {x: base.x, y: base.y}, b: {x: base.x + 1, y: base.y}},
             {dir: 'bottom', a: {x: base.x, y: base.y + 1}, b: {x: base.x + 1, y: base.y + 1}},
@@ -277,23 +319,22 @@ class LaserChessGame {
             {dir: 'right', a: {x: base.x + 1, y: base.y}, b: {x: base.x + 1, y: base.y + 1}}
         ];
 
-        const openOrder = ['top', 'bottom', 'left', 'right'];
+        const openOrder = preferredOpen ? [preferredOpen] : ['top', 'bottom', 'left', 'right'];
         for (const openDir of openOrder) {
-            // 开口边必须当前没有镜子
             const openEdge = edges.find(e => e.dir === openDir);
             if (!this.isEdgeFree(openEdge)) continue;
 
             const toPlace = edges.filter(e => e.dir !== openDir);
             if (toPlace.every(edge => this.canPlaceShieldEdge(edge, player))) {
-                for (const edge of toPlace) {
-                    this.mirrors.push({
-                        x1: edge.a.x,
-                        y1: edge.a.y,
-                        x2: edge.b.x,
-                        y2: edge.b.y,
-                        player
-                    });
-                }
+                const newMirrors = toPlace.map(edge => ({
+                    x1: edge.a.x,
+                    y1: edge.a.y,
+                    x2: edge.b.x,
+                    y2: edge.b.y,
+                    player
+                }));
+                this.mirrors.push(...newMirrors);
+                this.baseOpenSide[player] = openDir;
                 return true;
             }
         }
@@ -369,6 +410,16 @@ class LaserChessGame {
             (this.blueBase && this.isMirrorOnCell(mirror, this.blueBase))) {
             return false;
         }
+
+        // 保持基地开口：禁止在开口边放镜子
+        if (this.baseOpenSide.red && this.redBase && this.isOnOpenEdge(mirror, this.redBase, this.baseOpenSide.red)) {
+            this.showMessage('禁止封闭红方基地开口', 'warning');
+            return false;
+        }
+        if (this.baseOpenSide.blue && this.blueBase && this.isOnOpenEdge(mirror, this.blueBase, this.baseOpenSide.blue)) {
+            this.showMessage('禁止封闭蓝方基地开口', 'warning');
+            return false;
+        }
         
         // 检查是否与现有镜子重叠或交叉
         for (const existingMirror of this.mirrors) {
@@ -404,6 +455,18 @@ class LaserChessGame {
         }
         
         return false;
+    }
+
+    isOnOpenEdge(mirror, base, openDir) {
+        const edges = {
+            top:   {a: {x: base.x, y: base.y}, b: {x: base.x + 1, y: base.y}},
+            bottom:{a: {x: base.x, y: base.y + 1}, b: {x: base.x + 1, y: base.y + 1}},
+            left:  {a: {x: base.x, y: base.y}, b: {x: base.x, y: base.y + 1}},
+            right: {a: {x: base.x + 1, y: base.y}, b: {x: base.x + 1, y: base.y + 1}}
+        };
+        const edge = edges[openDir];
+        if (!edge) return false;
+        return this.matchesEdge(mirror, edge);
     }
     
     mirrorsOverlapOrIntersect(m1, m2) {
@@ -539,6 +602,9 @@ class LaserChessGame {
     aiMove() {
         if (this.gamePhase !== 'placeMirrors' || !this.aiEnabled) return;
         
+        this.aiThinking = true;
+        this.aiThoughtMirror = null;
+        this.draw();
         this.showMessage('AI思考中...', 'info');
         
         setTimeout(() => {
@@ -550,7 +616,14 @@ class LaserChessGame {
                 this.gridSize
             );
             
+            this.aiThinking = false;
             if (move) {
+                this.aiThoughtMirror = move;
+                setTimeout(() => {
+                    this.aiThoughtMirror = null;
+                    this.draw();
+                }, 900);
+
                 this.mirrors.push(move);
                 this.moveHistory.push({
                     type: 'mirror',
@@ -568,6 +641,8 @@ class LaserChessGame {
                 }
                 
                 this.updateStatus();
+                this.draw();
+            } else {
                 this.draw();
             }
         }, 800);
@@ -616,11 +691,16 @@ class LaserChessGame {
         this.selectedPoint = null;
         this.hoverPoint = null;
         this.winningLaser = null;
+        this.baseOpenSide = { red: null, blue: null };
+        this.aiThinking = false;
+        this.aiThoughtMirror = null;
         
         this.setupCanvas();
         this.updateStatus();
         this.draw();
         this.showMessage('游戏已重置', 'info');
+
+        this.baseOpenSide = { red: null, blue: null };
 
         if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
             setTimeout(() => this.aiPlaceBase(), 300);
@@ -696,6 +776,9 @@ class LaserChessGame {
         if (this.selectedPoint && this.hoverPoint && this.gamePhase === 'placeMirrors') {
             this.drawPreviewMirror(this.selectedPoint, this.hoverPoint);
         }
+
+        // AI 思考或落子可视化
+        this.drawAiOverlay();
     }
     
     drawGrid() {
@@ -735,35 +818,69 @@ class LaserChessGame {
     
     drawBases() {
         if (this.redBase) {
-            this.drawBase(this.redBase, '#ff6b6b');
+            this.drawBase(this.redBase, '#ff6b6b', 'red');
         }
         if (this.blueBase) {
-            this.drawBase(this.blueBase, '#4dabf7');
+            this.drawBase(this.blueBase, '#4dabf7', 'blue');
         }
     }
     
-    drawBase(base, color) {
+    drawBase(base, color, player) {
         const x = this.padding + base.x * this.cellSize;
         const y = this.padding + base.y * this.cellSize;
-        
+        const open = this.baseOpenSide[player];
+        const m = 2; // inner margin for visible gap
+
+        // 填充内区，留出边缘显示开口
         this.ctx.fillStyle = color;
-        this.ctx.globalAlpha = 0.3;
-        this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+        this.ctx.globalAlpha = 0.25;
+        this.ctx.fillRect(x + m, y + m, this.cellSize - 2 * m, this.cellSize - 2 * m);
         this.ctx.globalAlpha = 1;
-        
+
+        // 绘制边框，跳过开口方向
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = 3;
-        this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
-        
-        // 绘制X标记
-        this.ctx.strokeStyle = color;
-        this.ctx.lineWidth = 2;
-        this.ctx.beginPath();
-        this.ctx.moveTo(x + 3, y + 3);
-        this.ctx.lineTo(x + this.cellSize - 3, y + this.cellSize - 3);
-        this.ctx.moveTo(x + this.cellSize - 3, y + 3);
-        this.ctx.lineTo(x + 3, y + this.cellSize - 3);
-        this.ctx.stroke();
+        const edges = {
+            top:    {move: [x, y], line: [x + this.cellSize, y]},
+            bottom: {move: [x, y + this.cellSize], line: [x + this.cellSize, y + this.cellSize]},
+            left:   {move: [x, y], line: [x, y + this.cellSize]},
+            right:  {move: [x + this.cellSize, y], line: [x + this.cellSize, y + this.cellSize]}
+        };
+        Object.entries(edges).forEach(([dir, pts]) => {
+            if (dir === open) return;
+            this.ctx.beginPath();
+            this.ctx.moveTo(...pts.move);
+            this.ctx.lineTo(...pts.line);
+            this.ctx.stroke();
+        });
+
+        // 在开口方向画一个小箭头提示
+        if (open && edges[open]) {
+            const arrowColor = color;
+            this.ctx.fillStyle = arrowColor;
+            const midX = (edges[open].move[0] + edges[open].line[0]) / 2;
+            const midY = (edges[open].move[1] + edges[open].line[1]) / 2;
+            const a = 5;
+            this.ctx.beginPath();
+            if (open === 'top') {
+                this.ctx.moveTo(midX, y - 4);
+                this.ctx.lineTo(midX - a, y + 4);
+                this.ctx.lineTo(midX + a, y + 4);
+            } else if (open === 'bottom') {
+                this.ctx.moveTo(midX, y + this.cellSize + 4);
+                this.ctx.lineTo(midX - a, y + this.cellSize - 4);
+                this.ctx.lineTo(midX + a, y + this.cellSize - 4);
+            } else if (open === 'left') {
+                this.ctx.moveTo(x - 4, midY);
+                this.ctx.lineTo(x + 4, midY - a);
+                this.ctx.lineTo(x + 4, midY + a);
+            } else if (open === 'right') {
+                this.ctx.moveTo(x + this.cellSize + 4, midY);
+                this.ctx.lineTo(x + this.cellSize - 4, midY - a);
+                this.ctx.lineTo(x + this.cellSize - 4, midY + a);
+            }
+            this.ctx.fill();
+        }
     }
     
     drawMirrors() {
@@ -867,6 +984,39 @@ class LaserChessGame {
         this.ctx.shadowBlur = 0;
         this.ctx.globalAlpha = 1;
     }
+
+    drawAiOverlay() {
+        // 思考提示
+        if (this.aiThinking) {
+            this.ctx.save();
+            this.ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            this.ctx.fillRect(10, 10, 140, 32);
+            this.ctx.fillStyle = '#22d3ee';
+            this.ctx.font = '14px Segoe UI, sans-serif';
+            this.ctx.fillText('AI 思考中...', 20, 32);
+            this.ctx.restore();
+        }
+
+        // 高亮 AI 选择的镜子
+        if (this.aiThoughtMirror) {
+            const m = this.aiThoughtMirror;
+            const x1 = this.padding + m.x1 * this.cellSize;
+            const y1 = this.padding + m.y1 * this.cellSize;
+            const x2 = this.padding + m.x2 * this.cellSize;
+            const y2 = this.padding + m.y2 * this.cellSize;
+            this.ctx.save();
+            this.ctx.strokeStyle = 'rgba(34,211,238,0.9)';
+            this.ctx.lineWidth = 3;
+            this.ctx.setLineDash([6, 6]);
+            this.ctx.shadowColor = '#22d3ee';
+            this.ctx.shadowBlur = 12;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x1, y1);
+            this.ctx.lineTo(x2, y2);
+            this.ctx.stroke();
+            this.ctx.restore();
+        }
+    }
 }
 
 // 启动游戏与主页交互
@@ -883,6 +1033,10 @@ window.addEventListener('DOMContentLoaded', () => {
     startBtn.addEventListener('click', () => {
         const size = parseInt(homeGridSize.value);
         const aiOn = homeMode.value === 'ai';
+        const openSelect = document.getElementById('openSideSelect');
+        if (openSelect) {
+            game.baseOpenChoice = openSelect.value;
+        }
 
         // 同步到游戏控件
         const inGameSize = document.getElementById('gridSize');
