@@ -31,7 +31,7 @@
                                 <option value="ai" selected>对 AI（蓝方）</option>
                             </select>
                         </label>
-                        <button id="startGameBtn" class="btn primary" type="button">开始游戏</button>
+                        <button id="startGameBtn" class="btn primary" type="button" onclick="window.startGame && window.startGame()">开始游戏</button>
                     </div>
                     <ul class="quick-notes">
                         <li>放基地时自动生成三面防护，留一侧开口</li>
@@ -89,8 +89,8 @@
         </section>
     </div>
     
-    <script src="laserTracer.js" defer></script>
-    <script src="aiPlayer.js" defer></script>
-    <script src="game.js" defer></script>
+    <script src="laserTracer.js"></script>
+    <script src="aiPlayer.js"></script>
+    <script src="game.js"></script>
 </body>
 </html>

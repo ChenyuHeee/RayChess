@@ -609,13 +609,24 @@ class LaserChessGame {
         this.showMessage('AI思考中...', 'info');
         
         setTimeout(() => {
-            const move = findBestMove(
+            let move = findBestMove(
                 this.currentPlayer,
                 this.redBase,
                 this.blueBase,
                 this.mirrors,
                 this.gridSize
             );
+
+            // 兜底：若无最佳招，则随机合法招，避免卡住
+            if (!move) {
+                move = findRandomMove(
+                    this.currentPlayer,
+                    this.redBase,
+                    this.blueBase,
+                    this.mirrors,
+                    this.gridSize
+                );
+            }
             
             this.aiThinking = false;
             if (move) {
@@ -623,7 +634,7 @@ class LaserChessGame {
                 setTimeout(() => {
                     this.aiThoughtMirror = null;
                     this.draw();
-                }, 900);
+                }, 80);
 
                 this.mirrors.push(move);
                 this.moveHistory.push({
@@ -644,9 +655,13 @@ class LaserChessGame {
                 this.updateStatus();
                 this.draw();
             } else {
+                // AI 无路可走，跳过回合
+                this.showMessage('AI无可走步，回合跳过', 'warning');
+                this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                this.updateStatus();
                 this.draw();
             }
-        }, 800);
+        }, 80);
     }
     
     toggleAI() {
@@ -656,11 +671,11 @@ class LaserChessGame {
         
         if (this.aiEnabled && this.gamePhase === 'placeMirrors' && 
             this.currentPlayer === this.aiPlayer) {
-            setTimeout(() => this.aiMove(), 500);
+            setTimeout(() => this.aiMove(), 120);
         }
 
         if (this.aiEnabled && this.gamePhase === 'placeBase' && this.currentPlayer === this.aiPlayer) {
-            setTimeout(() => this.aiPlaceBase(), 300);
+            setTimeout(() => this.aiPlaceBase(), 80);
         }
     }
     
@@ -702,56 +717,46 @@ class LaserChessGame {
         this.draw();
         this.showMessage('游戏已重置', 'info');
 
-            this.aiThinkingTrace = null;
-        this.baseOpenSide = { red: null, blue: null };
+        if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
+            setTimeout(() => this.aiPlaceBase(), 80);
+        }
+    }
 
-            // 先计算评估结果并展示，再落子
-            setTimeout(() => {
-                const result = findBestMoveWithTrace(
-                    this.currentPlayer,
-                    this.redBase,
-                    this.blueBase,
-                    this.mirrors,
-                    this.gridSize
-                );
-
-                if (!result) {
-                    this.aiThinking = false;
-                    this.draw();
-                    return;
-                }
-
-                const { bestMove, evaluations } = result;
-                this.aiThoughtMirror = bestMove;
-                this.aiThinkingTrace = evaluations.slice(0, 4); // 顶部展示前4个候选
-                this.draw();
-
-                // 给玩家一点时间看思考过程，再落子
-                setTimeout(() => {
-                    this.aiThinking = false;
-
-                    this.mirrors.push(bestMove);
-                    this.moveHistory.push({
-                        type: 'mirror',
-                        mirror: { ...bestMove }
-                    });
-
-                    const winner = this.checkWinCondition();
-                    if (winner) {
-                        this.gamePhase = 'gameOver';
-                        this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
-                        this.drawWinningLaser(winner);
-                    } else {
-                        this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
-                        this.showMessage('AI已放置镜子', 'success');
-                    }
-
-                    this.updateStatus();
-                    this.aiThinkingTrace = null;
-                    this.aiThoughtMirror = null;
-                    this.draw();
-                }, 900);
-            }, 400);
+    updateStatus() {
+        const statusEl = document.getElementById('gameStatus');
+        const playerEl = document.getElementById('currentPlayer');
+        const phaseEl = document.getElementById('gamePhase');
+        const undoBtn = document.getElementById('undoBtn');
+        
+        if (this.gamePhase === 'placeBase') {
+            if (!this.redBase) {
+                statusEl.textContent = '请红方放置基地';
+                phaseEl.textContent = '基地放置';
+            } else {
+                statusEl.textContent = '请蓝方放置基地';
+                phaseEl.textContent = '基地放置';
+            }
+        } else if (this.gamePhase === 'placeMirrors') {
+            statusEl.textContent = '游戏进行中';
+            phaseEl.textContent = '镜子放置';
+        } else if (this.gamePhase === 'gameOver') {
+            const winner = this.currentPlayer === 'red' ? '蓝方' : '红方';
+            statusEl.textContent = `游戏结束 - ${winner}获胜`;
+            phaseEl.textContent = '游戏结束';
+        }
+        
+        playerEl.textContent = this.currentPlayer === 'red' ? '红方' : '蓝方';
+        playerEl.className = `player-indicator ${this.currentPlayer}`;
+        
+        undoBtn.disabled = this.moveHistory.length === 0 || this.gamePhase === 'gameOver';
+    }
+    
+    showMessage(message, type = 'info') {
+        const messageBox = document.getElementById('messageBox');
+        messageBox.textContent = message;
+        messageBox.className = `message-box ${type}`;
+        
+        // 自动清除消息
         setTimeout(() => {
             if (messageBox.textContent === message) {
                 messageBox.textContent = '';
@@ -1054,11 +1059,15 @@ class LaserChessGame {
 let game;
 
 function startGame() {
+    console.log('[LaserChess] startGame invoked');
     const homeView = document.getElementById('homeView');
     const gameView = document.getElementById('gameView');
     const homeGridSize = document.getElementById('homeGridSize');
     const homeMode = document.getElementById('homeMode');
-    if (!homeGridSize || !homeMode || !homeView || !gameView) return;
+    if (!homeGridSize || !homeMode || !homeView || !gameView) {
+        console.error('[LaserChess] missing DOM nodes for start');
+        return;
+    }
 
     // 若尚未初始化游戏实例，立即创建
     if (!game) {
@@ -1088,15 +1097,22 @@ function startGame() {
 
     homeView.classList.add('hidden');
     gameView.classList.remove('hidden');
+    console.log('[LaserChess] switched to game view');
 
     // 如需 AI 先手，在重置后触发
     if (game.aiEnabled && game.currentPlayer === game.aiPlayer && game.gamePhase === 'placeBase') {
-        setTimeout(() => game.aiPlaceBase(), 300);
+        setTimeout(() => game.aiPlaceBase(), 80);
     }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-    game = new LaserChessGame();
+    console.log('[LaserChess] DOMContentLoaded');
+    try {
+        game = new LaserChessGame();
+    } catch (err) {
+        alert('初始化失败: ' + err);
+        console.error(err);
+    }
 
     const startBtn = document.getElementById('startGameBtn');
     if (startBtn) {
@@ -1107,6 +1123,7 @@ window.addEventListener('DOMContentLoaded', () => {
     document.body.addEventListener('click', (e) => {
         if (e.target && e.target.id === 'startGameBtn') {
             e.preventDefault();
+            console.log('[LaserChess] delegated start click');
             startGame();
         }
     });
