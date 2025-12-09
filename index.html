@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>激光棋 - Laser Chess</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>激光棋</h1>
+        
+        <div class="game-info">
+            <div class="status-panel">
+                <h2 id="gameStatus">游戏准备中</h2>
+                <div class="current-player">
+                    <span>当前玩家：</span>
+                    <span id="currentPlayer" class="player-indicator red">红方</span>
+                </div>
+                <div class="phase-info">
+                    <span>阶段：</span>
+                    <span id="gamePhase">基地放置</span>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button id="resetBtn" class="btn">重新开始</button>
+                <button id="undoBtn" class="btn" disabled>撤销</button>
+                <button id="toggleAIBtn" class="btn">AI: 关闭</button>
+                <div class="grid-size-control">
+                    <label for="gridSize">网格大小：</label>
+                    <select id="gridSize">
+                        <option value="10">10×10</option>
+                        <option value="20">20×20</option>
+                        <option value="30">30×30</option>
+                        <option value="50" selected>50×50</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="legend">
+                <h3>游戏说明</h3>
+                <ul>
+                    <li><span class="legend-item red-base">■</span> 红方基地</li>
+                    <li><span class="legend-item blue-base">■</span> 蓝方基地</li>
+                    <li><span class="legend-item red-mirror">╱</span> 红方镜子</li>
+                    <li><span class="legend-item blue-mirror">╲</span> 蓝方镜子</li>
+                    <li>点击格点放置镜子</li>
+                    <li>镜子连接两个格点</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="game-board-container">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+        
+        <div class="message-box" id="messageBox"></div>
+    </div>
+    
+    <script src="laserTracer.js"></script>
+    <script src="aiPlayer.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>

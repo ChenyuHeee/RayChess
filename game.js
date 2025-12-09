@@ -1,0 +1,757 @@
+// 游戏主逻辑
+class LaserChessGame {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.gridSize = 50;
+        this.cellSize = 12; // 每个格子的像素大小
+        this.padding = 20;
+        
+        // 游戏状态
+        this.gamePhase = 'placeBase'; // placeBase, placeMirrors, gameOver
+        this.currentPlayer = 'red'; // red, blue
+        this.redBase = null; // {x, y}
+        this.blueBase = null; // {x, y}
+        this.mirrors = []; // [{x1, y1, x2, y2, player}]
+        this.moveHistory = [];
+        this.aiEnabled = false;
+        this.aiPlayer = 'blue'; // AI控制的玩家
+        
+        // 交互状态
+        this.selectedPoint = null; // 镜子放置的第一个点
+        this.hoverPoint = null; // 鼠标悬停的点
+        
+        this.init();
+    }
+    
+    init() {
+        this.setupCanvas();
+        this.setupEventListeners();
+        this.updateStatus();
+        this.draw();
+    }
+    
+    setupCanvas() {
+        const size = this.gridSize * this.cellSize + this.padding * 2;
+        this.canvas.width = size;
+        this.canvas.height = size;
+    }
+    
+    setupEventListeners() {
+        this.canvas.addEventListener('click', (e) => this.handleClick(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        
+        document.getElementById('resetBtn').addEventListener('click', () => this.reset());
+        document.getElementById('undoBtn').addEventListener('click', () => this.undo());
+        document.getElementById('toggleAIBtn').addEventListener('click', () => this.toggleAI());
+        document.getElementById('gridSize').addEventListener('change', (e) => {
+            this.gridSize = parseInt(e.target.value);
+            this.reset();
+        });
+    }
+    
+    getCanvasCoordinates(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        return {x, y};
+    }
+    
+    getNearestGridPoint(x, y) {
+        const gridX = Math.round((x - this.padding) / this.cellSize);
+        const gridY = Math.round((y - this.padding) / this.cellSize);
+        
+        if (gridX >= 0 && gridX <= this.gridSize && gridY >= 0 && gridY <= this.gridSize) {
+            return {x: gridX, y: gridY};
+        }
+        return null;
+    }
+    
+    handleMouseMove(e) {
+        const {x, y} = this.getCanvasCoordinates(e);
+        this.hoverPoint = this.getNearestGridPoint(x, y);
+        this.draw();
+    }
+    
+    handleClick(e) {
+        const {x, y} = this.getCanvasCoordinates(e);
+        const point = this.getNearestGridPoint(x, y);
+        
+        if (!point) return;
+        
+        if (this.gamePhase === 'placeBase') {
+            this.placeBase(point);
+        } else if (this.gamePhase === 'placeMirrors') {
+            this.placeMirror(point);
+        }
+    }
+    
+    placeBase(point) {
+        const {x, y} = point;
+        
+        // 检查是否已经有基地在这个位置
+        if ((this.redBase && this.redBase.x === x && this.redBase.y === y) ||
+            (this.blueBase && this.blueBase.x === x && this.blueBase.y === y)) {
+            this.showMessage('该位置已有基地', 'error');
+            return;
+        }
+        
+        if (this.currentPlayer === 'red') {
+            this.redBase = {x, y};
+            this.showMessage('红方基地已放置', 'success');
+            this.currentPlayer = 'blue';
+            if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
+                this.aiPlaceBase();
+                return;
+            }
+        } else {
+            // 检查是否与红方基地相邻
+            const dx = Math.abs(x - this.redBase.x);
+            const dy = Math.abs(y - this.redBase.y);
+            if (dx <= 1 && dy <= 1) {
+                this.showMessage('基地不能与对方基地相邻', 'error');
+                return;
+            }
+            
+            this.blueBase = {x, y};
+            this.showMessage('蓝方基地已放置，游戏开始！', 'success');
+            this.gamePhase = 'placeMirrors';
+            this.currentPlayer = 'red';
+            
+            // 检查是否需要AI行动
+            if (this.aiEnabled && this.aiPlayer === 'red') {
+                setTimeout(() => this.aiMove(), 500);
+            }
+        }
+        
+        this.updateStatus();
+        this.draw();
+    }
+
+    aiPlaceBase() {
+        const basePos = this.findAiBasePosition();
+        if (!basePos) {
+            this.showMessage('AI 无法放置基地，请手动放置', 'error');
+            return;
+        }
+
+        if (this.currentPlayer === 'red') {
+            this.redBase = basePos;
+            this.showMessage('AI 已放置红方基地', 'success');
+            this.currentPlayer = 'blue';
+        } else {
+            this.blueBase = basePos;
+            this.showMessage('AI 已放置蓝方基地，游戏开始！', 'success');
+            this.gamePhase = 'placeMirrors';
+            this.currentPlayer = 'red';
+        }
+
+        this.updateStatus();
+        this.draw();
+
+        if (this.aiEnabled && this.gamePhase === 'placeMirrors' && this.currentPlayer === this.aiPlayer) {
+            setTimeout(() => this.aiMove(), 500);
+        }
+    }
+
+    findAiBasePosition() {
+        const candidates = [];
+        for (let x = 0; x < this.gridSize; x++) {
+            for (let y = 0; y < this.gridSize; y++) {
+                const pos = {x, y};
+                if (!this.isBasePositionAllowed(pos)) continue;
+                candidates.push(pos);
+            }
+        }
+
+        if (candidates.length === 0) return null;
+
+        if (this.currentPlayer === 'blue' && this.redBase) {
+            let best = null;
+            let bestDist = -1;
+            for (const pos of candidates) {
+                const dx = pos.x - this.redBase.x;
+                const dy = pos.y - this.redBase.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > bestDist) {
+                    bestDist = dist;
+                    best = pos;
+                }
+            }
+            return best;
+        }
+
+        const idx = Math.floor(Math.random() * candidates.length);
+        return candidates[idx];
+    }
+
+    isBasePositionAllowed(pos) {
+        const inRange = pos.x >= 0 && pos.x < this.gridSize && pos.y >= 0 && pos.y < this.gridSize;
+        if (!inRange) return false;
+
+        if (this.redBase && pos.x === this.redBase.x && pos.y === this.redBase.y) return false;
+        if (this.blueBase && pos.x === this.blueBase.x && pos.y === this.blueBase.y) return false;
+
+        if (this.currentPlayer === 'blue' && this.redBase) {
+            const dx = Math.abs(pos.x - this.redBase.x);
+            const dy = Math.abs(pos.y - this.redBase.y);
+            if (dx <= 1 && dy <= 1) return false;
+        }
+
+        return true;
+    }
+    
+    placeMirror(point) {
+        if (!this.selectedPoint) {
+            // 选择第一个点
+            this.selectedPoint = point;
+            this.showMessage('请选择镜子的第二个端点', 'info');
+        } else {
+            // 选择第二个点，尝试放置镜子
+            const mirror = {
+                x1: this.selectedPoint.x,
+                y1: this.selectedPoint.y,
+                x2: point.x,
+                y2: point.y,
+                player: this.currentPlayer
+            };
+            
+            if (this.isValidMirror(mirror)) {
+                this.mirrors.push(mirror);
+                this.moveHistory.push({
+                    type: 'mirror',
+                    mirror: {...mirror}
+                });
+                
+                // 检查是否获胜
+                const winner = this.checkWinCondition();
+                if (winner) {
+                    this.gamePhase = 'gameOver';
+                    this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
+                    this.drawWinningLaser(winner);
+                } else {
+                    this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                    this.showMessage('镜子已放置', 'success');
+                    
+                    // 检查是否需要AI行动
+                    if (this.aiEnabled && this.aiPlayer === this.currentPlayer) {
+                        setTimeout(() => this.aiMove(), 500);
+                    }
+                }
+            } else {
+                this.showMessage('无效的镜子放置', 'error');
+            }
+            
+            this.selectedPoint = null;
+            this.updateStatus();
+            this.draw();
+        }
+    }
+    
+    isValidMirror(mirror) {
+        const {x1, y1, x2, y2} = mirror;
+        
+        // 检查两点是否相同
+        if (x1 === x2 && y1 === y2) {
+            return false;
+        }
+        
+        // 检查是否为有效连接（格子边或对角线）
+        const dx = Math.abs(x2 - x1);
+        const dy = Math.abs(y2 - y1);
+        
+        // 必须是相邻格点的连接
+        if (dx > 1 || dy > 1) {
+            return false;
+        }
+        
+        // 检查是否占据了基地
+        if ((this.redBase && this.isMirrorOnCell(mirror, this.redBase)) ||
+            (this.blueBase && this.isMirrorOnCell(mirror, this.blueBase))) {
+            return false;
+        }
+        
+        // 检查是否与现有镜子重叠或交叉
+        for (const existingMirror of this.mirrors) {
+            if (this.mirrorsOverlapOrIntersect(mirror, existingMirror)) {
+                return false;
+            }
+        }
+        
+        // 检查是否会导致自己的基地完全封闭
+        const testMirrors = [...this.mirrors, mirror];
+        if (this.isBaseCompletelyEnclosed(mirror.player, testMirrors)) {
+            this.showMessage('警告：不能完全封闭自己的基地！', 'warning');
+            return false;
+        }
+        
+        return true;
+    }
+    
+    isMirrorOnCell(mirror, cell) {
+        const {x1, y1, x2, y2} = mirror;
+        const {x, y} = cell;
+        
+        // 检查镜子的端点是否在格子的四个角上
+        const corners = [
+            {x, y}, {x: x+1, y}, {x, y: y+1}, {x: x+1, y: y+1}
+        ];
+        
+        for (const corner of corners) {
+            if ((x1 === corner.x && y1 === corner.y) || 
+                (x2 === corner.x && y2 === corner.y)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    mirrorsOverlapOrIntersect(m1, m2) {
+        // 检查是否完全重合
+        if ((m1.x1 === m2.x1 && m1.y1 === m2.y1 && m1.x2 === m2.x2 && m1.y2 === m2.y2) ||
+            (m1.x1 === m2.x2 && m1.y1 === m2.y2 && m1.x2 === m2.x1 && m1.y2 === m2.y1)) {
+            return true;
+        }
+        
+        // 检查是否共享端点并可能重叠
+        const sharePoint = (
+            (m1.x1 === m2.x1 && m1.y1 === m2.y1) ||
+            (m1.x1 === m2.x2 && m1.y1 === m2.y2) ||
+            (m1.x2 === m2.x1 && m1.y2 === m2.y1) ||
+            (m1.x2 === m2.x2 && m1.y2 === m2.y2)
+        );
+        
+        if (sharePoint) {
+            // 如果共享端点，检查是否在同一条线上（这样就重叠了）
+            const dx1 = m1.x2 - m1.x1;
+            const dy1 = m1.y2 - m1.y1;
+            const dx2 = m2.x2 - m2.x1;
+            const dy2 = m2.y2 - m2.y1;
+            
+            // 方向相同或相反
+            if ((dx1 === dx2 && dy1 === dy2) || (dx1 === -dx2 && dy1 === -dy2)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    isBaseCompletelyEnclosed(player, mirrors) {
+        // 简化的检查：如果基地周围的8个方向都被己方镜子包围，认为是完全封闭
+        // 这是一个保守的检查，实际游戏中可能需要更复杂的逻辑
+        const base = player === 'red' ? this.redBase : this.blueBase;
+        if (!base) return false;
+        
+        const playerMirrors = mirrors.filter(m => m.player === player);
+        
+        // 检查是否有4个或更多己方镜子直接连接到基地的四个角
+        let cornerCount = 0;
+        const corners = [
+            {x: base.x, y: base.y},
+            {x: base.x + 1, y: base.y},
+            {x: base.x, y: base.y + 1},
+            {x: base.x + 1, y: base.y + 1}
+        ];
+        
+        for (const corner of corners) {
+            for (const mirror of playerMirrors) {
+                if ((mirror.x1 === corner.x && mirror.y1 === corner.y) ||
+                    (mirror.x2 === corner.x && mirror.y2 === corner.y)) {
+                    cornerCount++;
+                    break;
+                }
+            }
+        }
+        
+        // 如果所有4个角都有镜子连接，可能形成封闭
+        return cornerCount >= 4;
+    }
+    
+    checkWinCondition() {
+        // 检查当前回合开始前，对手是否能击中当前玩家的基地
+        const attacker = this.currentPlayer === 'red' ? 'blue' : 'red';
+        const defender = this.currentPlayer;
+        const defenderBase = defender === 'red' ? this.redBase : this.blueBase;
+        
+        if (!defenderBase) return null;
+        
+        // 检查攻击方的所有可能激光路径
+        const attackerBase = attacker === 'red' ? this.redBase : this.blueBase;
+        if (!attackerBase) return null;
+        
+        const directions = [
+            {dx: 1, dy: 0},  // 右
+            {dx: -1, dy: 0}, // 左
+            {dx: 0, dy: 1},  // 下
+            {dx: 0, dy: -1}  // 上
+        ];
+        
+        for (const dir of directions) {
+            const laserPath = traceLaser(attackerBase, dir, this.mirrors, attacker, this.gridSize);
+            
+            // 检查激光是否击中防守方基地
+            for (const point of laserPath) {
+                if (Math.floor(point.x) === defenderBase.x && 
+                    Math.floor(point.y) === defenderBase.y) {
+                    this.winningLaser = {
+                        base: attackerBase,
+                        direction: dir,
+                        path: laserPath
+                    };
+                    return attacker;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    drawWinningLaser(winner) {
+        if (!this.winningLaser) return;
+        
+        setTimeout(() => {
+            this.draw();
+            this.drawLaserPath(this.winningLaser.path, winner);
+        }, 300);
+    }
+    
+    aiMove() {
+        if (this.gamePhase !== 'placeMirrors' || !this.aiEnabled) return;
+        
+        this.showMessage('AI思考中...', 'info');
+        
+        setTimeout(() => {
+            const move = findBestMove(
+                this.currentPlayer,
+                this.redBase,
+                this.blueBase,
+                this.mirrors,
+                this.gridSize
+            );
+            
+            if (move) {
+                this.mirrors.push(move);
+                this.moveHistory.push({
+                    type: 'mirror',
+                    mirror: {...move}
+                });
+                
+                const winner = this.checkWinCondition();
+                if (winner) {
+                    this.gamePhase = 'gameOver';
+                    this.showMessage(`${winner === 'red' ? '红方' : '蓝方'}获胜！`, 'success');
+                    this.drawWinningLaser(winner);
+                } else {
+                    this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+                    this.showMessage('AI已放置镜子', 'success');
+                }
+                
+                this.updateStatus();
+                this.draw();
+            }
+        }, 800);
+    }
+    
+    toggleAI() {
+        this.aiEnabled = !this.aiEnabled;
+        const btn = document.getElementById('toggleAIBtn');
+        btn.textContent = `AI: ${this.aiEnabled ? '开启 (蓝方)' : '关闭'}`;
+        
+        if (this.aiEnabled && this.gamePhase === 'placeMirrors' && 
+            this.currentPlayer === this.aiPlayer) {
+            setTimeout(() => this.aiMove(), 500);
+        }
+
+        if (this.aiEnabled && this.gamePhase === 'placeBase' && this.currentPlayer === this.aiPlayer) {
+            setTimeout(() => this.aiPlaceBase(), 300);
+        }
+    }
+    
+    undo() {
+        if (this.moveHistory.length === 0) return;
+        
+        const lastMove = this.moveHistory.pop();
+        if (lastMove.type === 'mirror') {
+            this.mirrors.pop();
+            this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
+            
+            if (this.gamePhase === 'gameOver') {
+                this.gamePhase = 'placeMirrors';
+            }
+            
+            this.showMessage('已撤销上一步', 'info');
+            this.updateStatus();
+            this.draw();
+        }
+    }
+    
+    reset() {
+        this.gamePhase = 'placeBase';
+        this.currentPlayer = 'red';
+        this.redBase = null;
+        this.blueBase = null;
+        this.mirrors = [];
+        this.moveHistory = [];
+        this.selectedPoint = null;
+        this.hoverPoint = null;
+        this.winningLaser = null;
+        
+        this.setupCanvas();
+        this.updateStatus();
+        this.draw();
+        this.showMessage('游戏已重置', 'info');
+
+        if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
+            setTimeout(() => this.aiPlaceBase(), 300);
+        }
+    }
+    
+    updateStatus() {
+        const statusEl = document.getElementById('gameStatus');
+        const playerEl = document.getElementById('currentPlayer');
+        const phaseEl = document.getElementById('gamePhase');
+        const undoBtn = document.getElementById('undoBtn');
+        
+        if (this.gamePhase === 'placeBase') {
+            if (!this.redBase) {
+                statusEl.textContent = '请红方放置基地';
+                phaseEl.textContent = '基地放置';
+            } else {
+                statusEl.textContent = '请蓝方放置基地';
+                phaseEl.textContent = '基地放置';
+            }
+        } else if (this.gamePhase === 'placeMirrors') {
+            statusEl.textContent = '游戏进行中';
+            phaseEl.textContent = '镜子放置';
+        } else if (this.gamePhase === 'gameOver') {
+            const winner = this.currentPlayer === 'red' ? '蓝方' : '红方';
+            statusEl.textContent = `游戏结束 - ${winner}获胜`;
+            phaseEl.textContent = '游戏结束';
+        }
+        
+        playerEl.textContent = this.currentPlayer === 'red' ? '红方' : '蓝方';
+        playerEl.className = `player-indicator ${this.currentPlayer}`;
+        
+        undoBtn.disabled = this.moveHistory.length === 0 || this.gamePhase === 'gameOver';
+    }
+    
+    showMessage(message, type = 'info') {
+        const messageBox = document.getElementById('messageBox');
+        messageBox.textContent = message;
+        messageBox.className = `message-box ${type}`;
+        
+        // 自动清除消息
+        setTimeout(() => {
+            if (messageBox.textContent === message) {
+                messageBox.textContent = '';
+                messageBox.className = 'message-box';
+            }
+        }, 3000);
+    }
+    
+    draw() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // 绘制网格
+        this.drawGrid();
+        
+        // 绘制镜子
+        this.drawMirrors();
+        
+        // 绘制基地
+        this.drawBases();
+        
+        // 绘制选中的点
+        if (this.selectedPoint) {
+            this.drawSelectedPoint(this.selectedPoint);
+        }
+        
+        // 绘制悬停效果
+        if (this.hoverPoint && this.gamePhase !== 'gameOver') {
+            this.drawHoverPoint(this.hoverPoint);
+        }
+        
+        // 绘制预览线
+        if (this.selectedPoint && this.hoverPoint && this.gamePhase === 'placeMirrors') {
+            this.drawPreviewMirror(this.selectedPoint, this.hoverPoint);
+        }
+    }
+    
+    drawGrid() {
+        this.ctx.strokeStyle = '#ddd';
+        this.ctx.lineWidth = 1;
+        
+        // 绘制竖线
+        for (let i = 0; i <= this.gridSize; i++) {
+            const x = this.padding + i * this.cellSize;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, this.padding);
+            this.ctx.lineTo(x, this.padding + this.gridSize * this.cellSize);
+            this.ctx.stroke();
+        }
+        
+        // 绘制横线
+        for (let i = 0; i <= this.gridSize; i++) {
+            const y = this.padding + i * this.cellSize;
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.padding, y);
+            this.ctx.lineTo(this.padding + this.gridSize * this.cellSize, y);
+            this.ctx.stroke();
+        }
+        
+        // 绘制格点
+        this.ctx.fillStyle = '#999';
+        for (let i = 0; i <= this.gridSize; i++) {
+            for (let j = 0; j <= this.gridSize; j++) {
+                const x = this.padding + i * this.cellSize;
+                const y = this.padding + j * this.cellSize;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, 2, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+        }
+    }
+    
+    drawBases() {
+        if (this.redBase) {
+            this.drawBase(this.redBase, '#ff6b6b');
+        }
+        if (this.blueBase) {
+            this.drawBase(this.blueBase, '#4dabf7');
+        }
+    }
+    
+    drawBase(base, color) {
+        const x = this.padding + base.x * this.cellSize;
+        const y = this.padding + base.y * this.cellSize;
+        
+        this.ctx.fillStyle = color;
+        this.ctx.globalAlpha = 0.3;
+        this.ctx.fillRect(x, y, this.cellSize, this.cellSize);
+        this.ctx.globalAlpha = 1;
+        
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 3;
+        this.ctx.strokeRect(x, y, this.cellSize, this.cellSize);
+        
+        // 绘制X标记
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x + 3, y + 3);
+        this.ctx.lineTo(x + this.cellSize - 3, y + this.cellSize - 3);
+        this.ctx.moveTo(x + this.cellSize - 3, y + 3);
+        this.ctx.lineTo(x + 3, y + this.cellSize - 3);
+        this.ctx.stroke();
+    }
+    
+    drawMirrors() {
+        for (const mirror of this.mirrors) {
+            this.drawMirror(mirror);
+        }
+    }
+    
+    drawMirror(mirror) {
+        const x1 = this.padding + mirror.x1 * this.cellSize;
+        const y1 = this.padding + mirror.y1 * this.cellSize;
+        const x2 = this.padding + mirror.x2 * this.cellSize;
+        const y2 = this.padding + mirror.y2 * this.cellSize;
+        
+        const color = mirror.player === 'red' ? '#ff6b6b' : '#4dabf7';
+        
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 4;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x1, y1);
+        this.ctx.lineTo(x2, y2);
+        this.ctx.stroke();
+        
+        // 绘制端点
+        this.ctx.fillStyle = color;
+        this.ctx.beginPath();
+        this.ctx.arc(x1, y1, 4, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.beginPath();
+        this.ctx.arc(x2, y2, 4, 0, Math.PI * 2);
+        this.ctx.fill();
+    }
+    
+    drawPreviewMirror(p1, p2) {
+        const x1 = this.padding + p1.x * this.cellSize;
+        const y1 = this.padding + p1.y * this.cellSize;
+        const x2 = this.padding + p2.x * this.cellSize;
+        const y2 = this.padding + p2.y * this.cellSize;
+        
+        const color = this.currentPlayer === 'red' ? '#ff6b6b' : '#4dabf7';
+        
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+        this.ctx.globalAlpha = 0.5;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x1, y1);
+        this.ctx.lineTo(x2, y2);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+        this.ctx.globalAlpha = 1;
+    }
+    
+    drawSelectedPoint(point) {
+        const x = this.padding + point.x * this.cellSize;
+        const y = this.padding + point.y * this.cellSize;
+        
+        this.ctx.strokeStyle = this.currentPlayer === 'red' ? '#ff6b6b' : '#4dabf7';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, 8, 0, Math.PI * 2);
+        this.ctx.stroke();
+    }
+    
+    drawHoverPoint(point) {
+        const x = this.padding + point.x * this.cellSize;
+        const y = this.padding + point.y * this.cellSize;
+        
+        this.ctx.fillStyle = this.currentPlayer === 'red' ? '#ff6b6b' : '#4dabf7';
+        this.ctx.globalAlpha = 0.3;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, 6, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.globalAlpha = 1;
+    }
+    
+    drawLaserPath(path, player) {
+        if (!path || path.length === 0) return;
+        
+        const color = player === 'red' ? '#ff6b6b' : '#4dabf7';
+        
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = 3;
+        this.ctx.shadowColor = color;
+        this.ctx.shadowBlur = 10;
+        this.ctx.globalAlpha = 0.8;
+        
+        this.ctx.beginPath();
+        for (let i = 0; i < path.length; i++) {
+            const x = this.padding + path[i].x * this.cellSize;
+            const y = this.padding + path[i].y * this.cellSize;
+            
+            if (i === 0) {
+                this.ctx.moveTo(x, y);
+            } else {
+                this.ctx.lineTo(x, y);
+            }
+        }
+        this.ctx.stroke();
+        
+        this.ctx.shadowBlur = 0;
+        this.ctx.globalAlpha = 1;
+    }
+}
+
+// 启动游戏
+let game;
+window.addEventListener('DOMContentLoaded', () => {
+    game = new LaserChessGame();
+});
