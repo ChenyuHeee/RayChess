@@ -7,55 +7,77 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
-        <h1>激光棋</h1>
-        
-        <div class="game-info">
-            <div class="status-panel">
-                <h2 id="gameStatus">游戏准备中</h2>
-                <div class="current-player">
-                    <span>当前玩家：</span>
-                    <span id="currentPlayer" class="player-indicator red">红方</span>
+    <div class="page">
+        <section id="homeView" class="home">
+            <div class="hero">
+                <div>
+                    <p class="eyebrow">策略 · 光学 · 对抗</p>
+                    <h1>激光棋 Laser Chess</h1>
+                    <p class="lede">选择棋盘与对战模式，点击开始后进入专注的对局界面。</p>
+                    <div class="home-actions">
+                        <label class="field">
+                            <span>网格大小</span>
+                            <select id="homeGridSize">
+                                <option value="10">10×10（快速）</option>
+                                <option value="20">20×20</option>
+                                <option value="30">30×30</option>
+                                <option value="50" selected>50×50（标准）</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>模式</span>
+                            <select id="homeMode">
+                                <option value="human">双人同屏</option>
+                                <option value="ai" selected>对 AI（蓝方）</option>
+                            </select>
+                        </label>
+                        <button id="startGameBtn" class="btn primary">开始游戏</button>
+                    </div>
+                    <ul class="quick-notes">
+                        <li>放基地时自动生成三面防护，留一侧开口</li>
+                        <li>镜子不可重叠/交叉，基地不可被四面封死</li>
+                        <li>轮到你时，从己方基地四向发射激光，若能击中对手基地即胜</li>
+                    </ul>
                 </div>
-                <div class="phase-info">
-                    <span>阶段：</span>
-                    <span id="gamePhase">基地放置</span>
+                <div class="hero-card">
+                    <p>开局前确认设置，点击开始直接进入对局。</p>
+                    <div class="pill">支持 AI（蓝方）</div>
+                    <div class="pill">50×50 标准盘</div>
+                    <div class="pill">三面防护基地</div>
                 </div>
             </div>
-            
-            <div class="controls">
-                <button id="resetBtn" class="btn">重新开始</button>
-                <button id="undoBtn" class="btn" disabled>撤销</button>
-                <button id="toggleAIBtn" class="btn">AI: 关闭</button>
-                <div class="grid-size-control">
-                    <label for="gridSize">网格大小：</label>
-                    <select id="gridSize">
+        </section>
+
+        <section id="gameView" class="game hidden">
+            <div class="game-topbar">
+                <div class="status-group">
+                    <span id="gameStatus" class="status-text">游戏准备中</span>
+                    <span class="dot"></span>
+                    <span id="gamePhase" class="phase">基地放置</span>
+                </div>
+                <div class="controls compact">
+                    <div class="current-player">
+                        <span>当前：</span>
+                        <span id="currentPlayer" class="player-indicator red">红方</span>
+                    </div>
+                    <select id="gridSize" class="pill-select">
                         <option value="10">10×10</option>
                         <option value="20">20×20</option>
                         <option value="30">30×30</option>
                         <option value="50" selected>50×50</option>
                     </select>
+                    <button id="toggleAIBtn" class="btn ghost">AI: 关闭</button>
+                    <button id="undoBtn" class="btn ghost" disabled>撤销</button>
+                    <button id="resetBtn" class="btn danger">重新开始</button>
                 </div>
             </div>
-            
-            <div class="legend">
-                <h3>游戏说明</h3>
-                <ul>
-                    <li><span class="legend-item red-base">■</span> 红方基地</li>
-                    <li><span class="legend-item blue-base">■</span> 蓝方基地</li>
-                    <li><span class="legend-item red-mirror">╱</span> 红方镜子</li>
-                    <li><span class="legend-item blue-mirror">╲</span> 蓝方镜子</li>
-                    <li>点击格点放置镜子</li>
-                    <li>镜子连接两个格点</li>
-                </ul>
+
+            <div class="game-board-container minimal">
+                <canvas id="gameCanvas"></canvas>
             </div>
-        </div>
-        
-        <div class="game-board-container">
-            <canvas id="gameCanvas"></canvas>
-        </div>
-        
-        <div class="message-box" id="messageBox"></div>
+            
+            <div class="message-box" id="messageBox"></div>
+        </section>
     </div>
     
     <script src="laserTracer.js"></script>

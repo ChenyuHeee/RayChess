@@ -98,6 +98,13 @@ class LaserChessGame {
         
         if (this.currentPlayer === 'red') {
             this.redBase = {x, y};
+            if (!this.createBaseShield(this.redBase, 'red')) {
+                this.redBase = null;
+                this.showMessage('该位置无法生成三面防护镜子，请换个位置', 'error');
+                this.updateStatus();
+                this.draw();
+                return;
+            }
             this.showMessage('红方基地已放置', 'success');
             this.currentPlayer = 'blue';
             if (this.aiEnabled && this.currentPlayer === this.aiPlayer) {
@@ -114,6 +121,13 @@ class LaserChessGame {
             }
             
             this.blueBase = {x, y};
+            if (!this.createBaseShield(this.blueBase, 'blue')) {
+                this.blueBase = null;
+                this.showMessage('该位置无法生成三面防护镜子，请换个位置', 'error');
+                this.updateStatus();
+                this.draw();
+                return;
+            }
             this.showMessage('蓝方基地已放置，游戏开始！', 'success');
             this.gamePhase = 'placeMirrors';
             this.currentPlayer = 'red';
@@ -137,10 +151,20 @@ class LaserChessGame {
 
         if (this.currentPlayer === 'red') {
             this.redBase = basePos;
+            if (!this.createBaseShield(this.redBase, 'red')) {
+                this.redBase = null;
+                this.showMessage('AI 未能找到可放置的三面防护基地位置', 'error');
+                return;
+            }
             this.showMessage('AI 已放置红方基地', 'success');
             this.currentPlayer = 'blue';
         } else {
             this.blueBase = basePos;
+            if (!this.createBaseShield(this.blueBase, 'blue')) {
+                this.blueBase = null;
+                this.showMessage('AI 未能找到可放置的三面防护基地位置', 'error');
+                return;
+            }
             this.showMessage('AI 已放置蓝方基地，游戏开始！', 'success');
             this.gamePhase = 'placeMirrors';
             this.currentPlayer = 'red';
@@ -160,6 +184,7 @@ class LaserChessGame {
             for (let y = 0; y < this.gridSize; y++) {
                 const pos = {x, y};
                 if (!this.isBasePositionAllowed(pos)) continue;
+                if (!this.canCreateShieldAt(pos, this.currentPlayer)) continue;
                 candidates.push(pos);
             }
         }
@@ -200,6 +225,81 @@ class LaserChessGame {
 
         return true;
     }
+
+    canCreateShieldAt(basePos, player) {
+        const edges = [
+            {dir: 'top', a: {x: basePos.x, y: basePos.y}, b: {x: basePos.x + 1, y: basePos.y}},
+            {dir: 'bottom', a: {x: basePos.x, y: basePos.y + 1}, b: {x: basePos.x + 1, y: basePos.y + 1}},
+            {dir: 'left', a: {x: basePos.x, y: basePos.y}, b: {x: basePos.x, y: basePos.y + 1}},
+            {dir: 'right', a: {x: basePos.x + 1, y: basePos.y}, b: {x: basePos.x + 1, y: basePos.y + 1}}
+        ];
+
+        for (const open of edges) {
+            if (!this.isEdgeFree(open)) continue;
+            const toPlace = edges.filter(e => e !== open);
+            if (toPlace.every(edge => this.canPlaceShieldEdge(edge, player))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    canPlaceShieldEdge(edge, player) {
+        const mirror = {
+            x1: edge.a.x,
+            y1: edge.a.y,
+            x2: edge.b.x,
+            y2: edge.b.y,
+            player
+        };
+
+        // 不得与已有镜子重叠或交叉
+        for (const m of this.mirrors) {
+            if (this.mirrorsOverlapOrIntersect(mirror, m) || this.mirrorsProperIntersect(mirror, m)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    isEdgeFree(edge) {
+        return !this.mirrors.some(m =>
+            (m.x1 === edge.a.x && m.y1 === edge.a.y && m.x2 === edge.b.x && m.y2 === edge.b.y) ||
+            (m.x2 === edge.a.x && m.y2 === edge.a.y && m.x1 === edge.b.x && m.y1 === edge.b.y)
+        );
+    }
+
+    createBaseShield(base, player) {
+        const edges = [
+            {dir: 'top', a: {x: base.x, y: base.y}, b: {x: base.x + 1, y: base.y}},
+            {dir: 'bottom', a: {x: base.x, y: base.y + 1}, b: {x: base.x + 1, y: base.y + 1}},
+            {dir: 'left', a: {x: base.x, y: base.y}, b: {x: base.x, y: base.y + 1}},
+            {dir: 'right', a: {x: base.x + 1, y: base.y}, b: {x: base.x + 1, y: base.y + 1}}
+        ];
+
+        const openOrder = ['top', 'bottom', 'left', 'right'];
+        for (const openDir of openOrder) {
+            // 开口边必须当前没有镜子
+            const openEdge = edges.find(e => e.dir === openDir);
+            if (!this.isEdgeFree(openEdge)) continue;
+
+            const toPlace = edges.filter(e => e.dir !== openDir);
+            if (toPlace.every(edge => this.canPlaceShieldEdge(edge, player))) {
+                for (const edge of toPlace) {
+                    this.mirrors.push({
+                        x1: edge.a.x,
+                        y1: edge.a.y,
+                        x2: edge.b.x,
+                        y2: edge.b.y,
+                        player
+                    });
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
     
     placeMirror(point) {
         if (!this.selectedPoint) {
@@ -223,7 +323,7 @@ class LaserChessGame {
                     mirror: {...mirror}
                 });
                 
-                // 检查是否获胜
+                // 检查是否获胜（当前玩家进攻）
                 const winner = this.checkWinCondition();
                 if (winner) {
                     this.gamePhase = 'gameOver';
@@ -233,7 +333,6 @@ class LaserChessGame {
                     this.currentPlayer = this.currentPlayer === 'red' ? 'blue' : 'red';
                     this.showMessage('镜子已放置', 'success');
                     
-                    // 检查是否需要AI行动
                     if (this.aiEnabled && this.aiPlayer === this.currentPlayer) {
                         setTimeout(() => this.aiMove(), 500);
                     }
@@ -273,15 +372,15 @@ class LaserChessGame {
         
         // 检查是否与现有镜子重叠或交叉
         for (const existingMirror of this.mirrors) {
-            if (this.mirrorsOverlapOrIntersect(mirror, existingMirror)) {
+            if (this.mirrorsOverlapOrIntersect(mirror, existingMirror) || this.mirrorsProperIntersect(mirror, existingMirror)) {
                 return false;
             }
         }
         
-        // 检查是否会导致自己的基地完全封闭
+        // 检查是否会导致任一基地被四面镜子严密包围（不允许超过三面）
         const testMirrors = [...this.mirrors, mirror];
-        if (this.isBaseCompletelyEnclosed(mirror.player, testMirrors)) {
-            this.showMessage('警告：不能完全封闭自己的基地！', 'warning');
+        if (this.isBaseStrictlyEnclosed('red', testMirrors) || this.isBaseStrictlyEnclosed('blue', testMirrors)) {
+            this.showMessage('警告：基地四周最多允许三面镜子，不能被严密包围！', 'warning');
             return false;
         }
         
@@ -337,74 +436,94 @@ class LaserChessGame {
         
         return false;
     }
+
+    mirrorsProperIntersect(m1, m2) {
+        // 排除共享端点的情况
+        const sharesEndpoint = (
+            (m1.x1 === m2.x1 && m1.y1 === m2.y1) ||
+            (m1.x1 === m2.x2 && m1.y1 === m2.y2) ||
+            (m1.x2 === m2.x1 && m1.y2 === m2.y1) ||
+            (m1.x2 === m2.x2 && m1.y2 === m2.y2)
+        );
+        if (sharesEndpoint) return false;
+
+        return this.segmentsIntersect(m1, m2);
+    }
+
+    segmentsIntersect(m1, m2) {
+        const p1 = {x: m1.x1, y: m1.y1};
+        const p2 = {x: m1.x2, y: m1.y2};
+        const p3 = {x: m2.x1, y: m2.y1};
+        const p4 = {x: m2.x2, y: m2.y2};
+
+        const d1 = this.direction(p3, p4, p1);
+        const d2 = this.direction(p3, p4, p2);
+        const d3 = this.direction(p1, p2, p3);
+        const d4 = this.direction(p1, p2, p4);
+
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+            return true;
+        }
+
+        return false;
+    }
+
+    direction(p1, p2, p3) {
+        return (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+    }
     
-    isBaseCompletelyEnclosed(player, mirrors) {
-        // 简化的检查：如果基地周围的8个方向都被己方镜子包围，认为是完全封闭
-        // 这是一个保守的检查，实际游戏中可能需要更复杂的逻辑
+    isBaseStrictlyEnclosed(player, mirrors) {
         const base = player === 'red' ? this.redBase : this.blueBase;
         if (!base) return false;
-        
-        const playerMirrors = mirrors.filter(m => m.player === player);
-        
-        // 检查是否有4个或更多己方镜子直接连接到基地的四个角
-        let cornerCount = 0;
-        const corners = [
-            {x: base.x, y: base.y},
-            {x: base.x + 1, y: base.y},
-            {x: base.x, y: base.y + 1},
-            {x: base.x + 1, y: base.y + 1}
+
+        const edges = [
+            {a: {x: base.x, y: base.y}, b: {x: base.x + 1, y: base.y}},           // 上边
+            {a: {x: base.x, y: base.y + 1}, b: {x: base.x + 1, y: base.y + 1}},   // 下边
+            {a: {x: base.x, y: base.y}, b: {x: base.x, y: base.y + 1}},           // 左边
+            {a: {x: base.x + 1, y: base.y}, b: {x: base.x + 1, y: base.y + 1}}    // 右边
         ];
-        
-        for (const corner of corners) {
-            for (const mirror of playerMirrors) {
-                if ((mirror.x1 === corner.x && mirror.y1 === corner.y) ||
-                    (mirror.x2 === corner.x && mirror.y2 === corner.y)) {
-                    cornerCount++;
-                    break;
-                }
+
+        let covered = 0;
+        for (const edge of edges) {
+            if (mirrors.some(m => (
+                (m.x1 === edge.a.x && m.y1 === edge.a.y && m.x2 === edge.b.x && m.y2 === edge.b.y) ||
+                (m.x2 === edge.a.x && m.y2 === edge.a.y && m.x1 === edge.b.x && m.y1 === edge.b.y)
+            ))) {
+                covered++;
             }
         }
-        
-        // 如果所有4个角都有镜子连接，可能形成封闭
-        return cornerCount >= 4;
+
+        return covered >= 4; // 四面全封为严密包围
     }
     
     checkWinCondition() {
-        // 检查当前回合开始前，对手是否能击中当前玩家的基地
-        const attacker = this.currentPlayer === 'red' ? 'blue' : 'red';
-        const defender = this.currentPlayer;
-        const defenderBase = defender === 'red' ? this.redBase : this.blueBase;
-        
-        if (!defenderBase) return null;
-        
-        // 检查攻击方的所有可能激光路径
+        // 当前回合玩家作为进攻方，四向发射激光，若能击中对手基地则胜
+        const attacker = this.currentPlayer;
+        const defender = attacker === 'red' ? 'blue' : 'red';
         const attackerBase = attacker === 'red' ? this.redBase : this.blueBase;
-        if (!attackerBase) return null;
-        
+        const defenderBase = defender === 'red' ? this.redBase : this.blueBase;
+
+        if (!attackerBase || !defenderBase) return null;
+
         const directions = [
             {dx: 1, dy: 0},  // 右
             {dx: -1, dy: 0}, // 左
             {dx: 0, dy: 1},  // 下
             {dx: 0, dy: -1}  // 上
         ];
-        
+
         for (const dir of directions) {
             const laserPath = traceLaser(attackerBase, dir, this.mirrors, attacker, this.gridSize);
-            
-            // 检查激光是否击中防守方基地
+
             for (const point of laserPath) {
-                if (Math.floor(point.x) === defenderBase.x && 
-                    Math.floor(point.y) === defenderBase.y) {
-                    this.winningLaser = {
-                        base: attackerBase,
-                        direction: dir,
-                        path: laserPath
-                    };
+                if (Math.floor(point.x) === defenderBase.x && Math.floor(point.y) === defenderBase.y) {
+                    this.winningLaser = { base: attackerBase, direction: dir, path: laserPath };
                     return attacker;
                 }
             }
         }
-        
+
         return null;
     }
     
@@ -750,8 +869,37 @@ class LaserChessGame {
     }
 }
 
-// 启动游戏
+// 启动游戏与主页交互
 let game;
 window.addEventListener('DOMContentLoaded', () => {
+    const homeView = document.getElementById('homeView');
+    const gameView = document.getElementById('gameView');
+    const startBtn = document.getElementById('startGameBtn');
+    const homeGridSize = document.getElementById('homeGridSize');
+    const homeMode = document.getElementById('homeMode');
+
     game = new LaserChessGame();
+
+    startBtn.addEventListener('click', () => {
+        const size = parseInt(homeGridSize.value);
+        const aiOn = homeMode.value === 'ai';
+
+        // 同步到游戏控件
+        const inGameSize = document.getElementById('gridSize');
+        inGameSize.value = String(size);
+        game.gridSize = size;
+        game.reset();
+
+        game.aiEnabled = aiOn;
+        const aiBtn = document.getElementById('toggleAIBtn');
+        aiBtn.textContent = `AI: ${aiOn ? '开启 (蓝方)' : '关闭'}`;
+
+        homeView.classList.add('hidden');
+        gameView.classList.remove('hidden');
+
+        // 如需 AI 先手，在重置后触发
+        if (game.aiEnabled && game.currentPlayer === game.aiPlayer && game.gamePhase === 'placeBase') {
+            setTimeout(() => game.aiPlaceBase(), 300);
+        }
+    });
 });
