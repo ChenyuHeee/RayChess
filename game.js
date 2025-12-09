@@ -1102,6 +1102,14 @@ window.addEventListener('DOMContentLoaded', () => {
     if (startBtn) {
         startBtn.addEventListener('click', startGame);
     }
+
+    // 委托式兜底，避免按钮事件绑定失效
+    document.body.addEventListener('click', (e) => {
+        if (e.target && e.target.id === 'startGameBtn') {
+            e.preventDefault();
+            startGame();
+        }
+    });
 });
 
 // 提供全局访问，防止事件绑定失败时仍可触发
